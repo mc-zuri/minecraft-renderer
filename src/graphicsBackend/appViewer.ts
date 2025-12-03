@@ -18,16 +18,14 @@ import type {
   GraphicsInitOptions,
   DisplayWorldOptions,
   RendererReactiveState,
-  NonReactiveState,
-  ResourcesManagerLike,
-  WorldViewLike
+  NonReactiveState
 } from './types'
-import { WorldView, WorldProvider } from '../worldView'
+import { WorldView, WorldProvider, WorldViewWorker } from '../worldView'
 import { getInitialPlayerState } from './playerState'
 import { defaultWorldRendererConfig, defaultGraphicsBackendConfig, getDefaultRendererState } from './config'
 import type { WorldRendererConfig } from '../lib/worldrendererCommon'
 import { PlayerStateReactive } from '@/playerState/playerState'
-import { ResourcesManager } from '@/resourcesManager'
+import { ResourcesManager, ResourcesManagerTransferred } from '@/resourcesManager'
 
 export interface AppViewerOptions {
   config?: Partial<GraphicsBackendConfig>
@@ -113,8 +111,8 @@ export class AppViewer {
 
     this.backendLoader = loader
 
-    const loaderOptions: GraphicsInitOptions = {
-      resourcesManager: this.resourcesManager!,
+    const loaderOptions: GraphicsInitOptions = { // todo!
+      resourcesManager: this.resourcesManager! as unknown as ResourcesManagerTransferred,
       config: this.config,
       callbacks: {
         displayCriticalError: (error) => {
@@ -165,7 +163,7 @@ export class AppViewer {
 
     const displayWorldOptions: DisplayWorldOptions = {
       version: this.resourcesManager?.currentConfig?.version ?? '1.20.4',
-      worldView: this.worldView as unknown as WorldViewLike,
+      worldView: this.worldView as unknown as WorldViewWorker,
       inWorldRenderingConfig: this.inWorldRenderingConfig,
       playerStateReactive,
       rendererState: this.rendererState,

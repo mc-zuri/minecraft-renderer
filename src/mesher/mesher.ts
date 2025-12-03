@@ -6,7 +6,7 @@ import { INVISIBLE_BLOCKS } from './worldConstants'
 
 globalThis.structuredClone ??= (value) => JSON.parse(JSON.stringify(value))
 
-if (module.require) {
+if (globalThis.module && module.require) {
   // If we are in a node environement, we need to fake some env variables
   const r = module.require
   const { parentPort } = r('worker_threads')
@@ -20,7 +20,7 @@ let world: World
 let dirtySections = new Map<string, number>()
 let allDataReady = false
 
-function sectionKey (x, y, z) {
+function sectionKey(x, y, z) {
   return `${x},${y},${z}`
 }
 
@@ -41,13 +41,13 @@ const postMessage = (data, transferList = []) => {
   })
 }
 
-function drainQueue (from, to) {
+function drainQueue(from, to) {
   const messages = queuedMessages.slice(from, to)
   global.postMessage(messages.map(m => m.data), messages.flatMap(m => m.transferList) as unknown as string)
   queuedMessages = queuedMessages.slice(to)
 }
 
-function setSectionDirty (pos, value = true) {
+function setSectionDirty(pos, value = true) {
   const x = Math.floor(pos.x / 16) * 16
   const y = Math.floor(pos.y / 16) * 16
   const z = Math.floor(pos.z / 16) * 16
@@ -100,7 +100,7 @@ const handleMessage = data => {
     case 'sideControl': {
       if (data.value === 'graphicsBackendThree') {
         sideControl = true
-        void import('../../three/graphicsBackend').then(module => {
+        void import('../three/graphicsBackend').then(module => {
           const graphicsBackend = module.createGraphicsBackendBase()
           graphicsBackend.workerProxy()
           global.postMessage({ type: 'sideControlTookOver' })
@@ -189,7 +189,7 @@ const handleMessage = data => {
 
       break
     }
-  // No default
+    // No default
   }
 }
 

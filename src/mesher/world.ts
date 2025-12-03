@@ -3,20 +3,20 @@ import mcData from 'minecraft-data'
 import { Block } from 'prismarine-block'
 import { Vec3 } from 'vec3'
 import { WorldBlockProvider } from 'mc-assets/dist/worldBlockProvider'
-import moreBlockDataGeneratedJson from '../moreBlockDataGenerated.json'
-import legacyJson from '../../../../src/preflatMap.json'
-import { getBlockPosKey } from '../simpleUtils'
+import moreBlockDataGeneratedJson from '../lib/moreBlockDataGenerated.json'
+import legacyJson from '../lib/preflatMap.json'
+import { getBlockPosKey } from '../lib/simpleUtils'
 import { defaultMesherConfig, CustomBlockModels, BlockStateModelInfo, getBlockAssetsCacheKey, MesherGeometryOutput } from './shared'
 import { INVISIBLE_BLOCKS } from './worldConstants'
 import { buildRotationMatrix, elemFaces, matmul3, matmulmat3, vecadd3, vecsub3 } from './modelsGeometryCommon'
 
 const ignoreAoBlocks = Object.keys(moreBlockDataGeneratedJson.noOcclusions)
 
-export function worldColumnKey (x, z) {
+export function worldColumnKey(x, z) {
   return `${x},${z}`
 }
 
-function isCube (shapes) {
+function isCube(shapes) {
   if (!shapes || shapes.length !== 1) return false
   const shape = shapes[0]
   return shape[0] === 0 && shape[1] === 0 && shape[2] === 0 && shape[3] === 1 && shape[4] === 1 && shape[5] === 1
@@ -68,14 +68,14 @@ export class World {
   sentBlockStateModels = new Set<string>()
   blockStateModelInfo = new Map<string, BlockStateModelInfo>()
 
-  constructor (version) {
+  constructor(version) {
     this.Chunk = Chunks(version) as any
     this.biomeCache = mcData(version).biomes
     this.preflat = !mcData(version).supportFeature('blockStateId')
     this.config.version = version
   }
 
-  getLight (pos: Vec3, isNeighbor = false, skipMoreChecks = false, curBlockName = '') {
+  getLight(pos: Vec3, isNeighbor = false, skipMoreChecks = false, curBlockName = '') {
     // for easier testing
     if (!(pos instanceof Vec3)) pos = new Vec3(...pos as [number, number, number])
     const { enableLighting, skyLight } = this.config
@@ -110,21 +110,21 @@ export class World {
     return result
   }
 
-  addColumn (x, z, json) {
+  addColumn(x, z, json) {
     const chunk = this.Chunk.fromJson(json)
     this.columns[worldColumnKey(x, z)] = chunk as any
     return chunk
   }
 
-  removeColumn (x, z) {
+  removeColumn(x, z) {
     delete this.columns[worldColumnKey(x, z)]
   }
 
-  getColumn (x, z) {
+  getColumn(x, z) {
     return this.columns[worldColumnKey(x, z)]
   }
 
-  setBlockStateId (pos: Vec3, stateId) {
+  setBlockStateId(pos: Vec3, stateId) {
     if (stateId === undefined) throw new Error('stateId is undefined')
     const key = worldColumnKey(Math.floor(pos.x / 16) * 16, Math.floor(pos.z / 16) * 16)
 
@@ -137,11 +137,11 @@ export class World {
     return true
   }
 
-  getColumnByPos (pos: Vec3) {
+  getColumnByPos(pos: Vec3) {
     return this.getColumn(Math.floor(pos.x / 16) * 16, Math.floor(pos.z / 16) * 16)
   }
 
-  getBlock (pos: Vec3, blockProvider?: WorldBlockProvider, attr?: { hadErrors?: boolean }): WorldBlock | null {
+  getBlock(pos: Vec3, blockProvider?: WorldBlockProvider, attr?: { hadErrors?: boolean }): WorldBlock | null {
     // for easier testing
     if (!(pos instanceof Vec3)) pos = new Vec3(...pos as [number, number, number])
     const chunkKey = worldColumnKey(Math.floor(pos.x / 16) * 16, Math.floor(pos.z / 16) * 16)
@@ -165,7 +165,7 @@ export class World {
       b.isCube = isCube(b.shapes)
       this.blockCache[cacheKey] = b
       Object.defineProperty(b, 'position', {
-        get () {
+        get() {
           throw new Error('position is not reliable, use pos parameter instead of block.position')
         }
       })
@@ -262,7 +262,7 @@ export class World {
     return block
   }
 
-  shouldMakeAo (block: WorldBlock | null) {
+  shouldMakeAo(block: WorldBlock | null) {
     return block?.isCube && !ignoreAoBlocks.includes(block.name) && block.boundingBox !== 'empty'
   }
 }
@@ -285,10 +285,10 @@ const hasChunkSection = (column, pos) => {
   if (column.sections) return column.sections[pos.y >> 4]
 }
 
-function posInChunk (pos) {
+function posInChunk(pos) {
   return new Vec3(Math.floor(pos.x) & 15, Math.floor(pos.y), Math.floor(pos.z) & 15)
 }
 
-function getLightSectionIndex (pos, minY = 0) {
+function getLightSectionIndex(pos, minY = 0) {
   return Math.floor((pos.y - minY) / 16) + 1
 }

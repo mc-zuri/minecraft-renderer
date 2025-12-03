@@ -22,6 +22,7 @@
         "experimentalDecorators": true,
         "emitDecoratorMetadata": true,
         "noImplicitAny": false,
+        "useUnknownInCatchVariables": false,
         "noEmit": false,
         "jsx": "react-jsx",
         "paths": {

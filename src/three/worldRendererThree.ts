@@ -5,13 +5,13 @@ import PrismarineChatLoader from 'prismarine-chat'
 import * as tweenJs from '@tweenjs/tween.js'
 import { Biome } from 'minecraft-data'
 import { renderSign } from '../sign-renderer'
-import { DisplayWorldOptions, GraphicsInitOptions } from '../types'
+import { DisplayWorldOptions, GraphicsInitOptions } from '@/graphicsBackend/types'
 import { chunkPos, sectionPos } from '../lib/simpleUtils'
 import { WorldRendererCommon } from '../lib/worldrendererCommon'
 import { addNewStat } from '../lib/ui/newStats'
-import { MesherGeometryOutput } from '../lib/mesher/shared'
-import { ItemSpecificContextProperties } from '../lib/basePlayerState'
-import { setBlockPosition } from '../lib/mesher/standaloneRenderer'
+import { MesherGeometryOutput } from '../mesher/shared'
+import { ItemSpecificContextProperties } from '@/playerState/types'
+import { setBlockPosition } from '../mesher/standaloneRenderer'
 import { getBannerTexture, createBannerMesh, releaseBannerTexture } from './bannerRenderer'
 import { getMyHand } from './hand'
 import HoldingBlock from './holdingBlock'
@@ -49,16 +49,16 @@ export class WorldRendererThree extends WorldRendererCommon {
   entities = new Entities(this, (globalThis as any).mcData)
   cameraGroupVr?: THREE.Object3D
   material = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, alphaTest: 0.1 })
-  itemsTexture: THREE.Texture
+  itemsTexture!: THREE.Texture
   cursorBlock: CursorBlock
   onRender: Array<() => void> = []
   cameraShake: CameraShake
-  cameraContainer: THREE.Object3D
+  cameraContainer!: THREE.Object3D
   media: ThreeJsMedia
   waitingChunksToDisplay = {} as { [chunkKey: string]: SectionKey[] }
   waypoints: WaypointsRenderer
   cinimaticScript: CinimaticScriptRunner
-  camera: THREE.PerspectiveCamera
+  camera!: THREE.PerspectiveCamera
   renderTimeAvg = 0
   // Memory usage tracking (in bytes)
   estimatedMemoryUsage = 0
@@ -946,7 +946,7 @@ export class WorldRendererThree extends WorldRendererCommon {
           .replace('https://textures.minecraft.net/', skinTexturesProxy)
       }
 
-      const mesh = getMesh(this, skinUrl, armorModel.head)
+      const mesh = getMesh(this, skinUrl, armorModel.head as any)
       const group = new THREE.Group()
       if (isWall) {
         mesh.position.set(0, 0.3125, 0.3125)

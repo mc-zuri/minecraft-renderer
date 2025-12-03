@@ -30,6 +30,11 @@
         "webgl",
         "prismarine"
     ],
+    "release": {
+        "initialVersion": {
+            "version": "0.1.0"
+        }
+    },
     "license": "MIT",
     "dependencies": {
         "@tweenjs/tween.js": "^20.0.3",

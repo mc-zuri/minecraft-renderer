@@ -51,7 +51,7 @@ class MainScene extends BasePlaygroundScene {
 
   blockProps = {}
   metadataFolder: GUI | undefined
-  metadataGui!: Controller
+  metadataGui: Controller | undefined
 
   override onParamUpdate = {
     version() {
@@ -73,7 +73,7 @@ class MainScene extends BasePlaygroundScene {
         for (const state of states) {
           let defaultValue: string | number | boolean
           if (state.values) { // int, enum
-            defaultValue = state.values[0]
+            defaultValue = state.values[0] as string | number | boolean
           } else {
             switch (state.type) {
               case 'bool':
@@ -158,7 +158,7 @@ class MainScene extends BasePlaygroundScene {
   }
 
   getBlock() {
-    return mcData.blocksByName[this.params.block || 'air']
+    return this.mcData.blocksByName[this.params.block || 'air']
   }
 
   // applyChanges (metadataUpdate = false, skipQs = false) {
@@ -186,7 +186,7 @@ class MainScene extends BasePlaygroundScene {
     this.worldView!.setBlockStateId(this.targetPos, block.stateId ?? 0)
     console.log('up stateId', block.stateId)
     this.params.metadata = block.metadata
-    this.metadataGui.updateDisplay()
+    this.metadataGui?.updateDisplay()
   }
 
   override renderFinish() {
@@ -231,7 +231,7 @@ class MainScene extends BasePlaygroundScene {
     // this.worldRenderer!.camera.lookAt(center.x + 0.5, center.y + 0.5, center.z + 0.5)
     this.worldRenderer.camera.position.set(cameraPos.x + 1, cameraPos.y + 0.5, cameraPos.z + 1)
 
-    const allBlocks = mcData.blocksArray.map(b => b.name)
+    const allBlocks = this.mcData.blocksArray.map(b => b.name)
     // const allBlocks = ['stone', 'warped_slab']
 
     let blockCount = 1
@@ -260,6 +260,7 @@ class MainScene extends BasePlaygroundScene {
       }
     })
 
+    //@ts-ignore
     const zip = new JSZip()
     zip.file('description.txt', 'Generated with mcraft.fun/playground')
 

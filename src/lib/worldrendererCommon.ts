@@ -9,7 +9,6 @@ import { proxy } from 'valtio'
 import type { ResourcesManagerTransferred } from '../resourcesManager/resourcesManager'
 import { dynamicMcDataFiles } from './buildSharedConfig.mjs'
 import { DisplayWorldOptions, GraphicsInitOptions, RendererReactiveState, SoundSystem } from '../graphicsBackend/types'
-import { buildCleanupDecorator } from './cleanupDecorator'
 import { HighestBlockInfo, CustomBlockModels, BlockStateModelInfo, getBlockAssetsCacheKey, MesherConfig, MesherMainEvent } from '../mesher/shared'
 import { chunkPos } from './simpleUtils'
 import { addNewStat, removeAllStats, updatePanesVisibility, updateStatText } from './ui/newStats'
@@ -29,8 +28,6 @@ const toMajorVersion = version => {
   const [a, b] = (String(version)).split('.')
   return `${a}.${b}`
 }
-
-export const worldCleanup = buildCleanupDecorator('resetWorld')
 
 export const defaultWorldRendererConfig = {
   paused: false,
@@ -99,20 +96,15 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
   active = false
 
   // #region CHUNK & SECTIONS TRACKING
-  @worldCleanup()
   loadedChunks = {} as Record<string, boolean> // data is added for these chunks and they might be still processing
 
-  @worldCleanup()
   finishedChunks = {} as Record<string, boolean> // these chunks are fully loaded into the world (scene)
 
-  @worldCleanup()
   finishedSections = {} as Record<string, boolean> // these sections are fully loaded into the world (scene)
 
-  @worldCleanup()
   // loading sections (chunks)
   sectionsWaiting = new Map<string, number>()
 
-  @worldCleanup()
   queuedChunks = new Set<string>()
   queuedFunctions = [] as Array<() => void>
   // #endregion
@@ -164,7 +156,6 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
 
   protocolCustomBlocks = new Map<string, CustomBlockModels>()
 
-  @worldCleanup()
   blockStateModelInfo = new Map<string, BlockStateModelInfo>()
 
   abstract outputFormat: 'threeJs' | 'webgpu'
@@ -1047,6 +1038,14 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
     }
 
     this.active = false
+
+    // Clear chunk and section tracking (previously handled by @worldCleanup decorator)
+    this.loadedChunks = {}
+    this.finishedChunks = {}
+    this.finishedSections = {}
+    this.sectionsWaiting.clear()
+    this.queuedChunks.clear()
+    this.blockStateModelInfo.clear()
 
     this.renderUpdateEmitter.removeAllListeners()
     this.abortController.abort()

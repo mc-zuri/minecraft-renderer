@@ -16,7 +16,7 @@ export default defineConfig({
     polyfill: 'usage',
     assetPrefix: './',
     distPath: {
-      root: './dist-playground',
+      root: './dist',
     },
   },
   source: {
@@ -33,6 +33,11 @@ export default defineConfig({
       'process.env.BROWSER': '"true"',
       'globalThis.includedVersions': JSON.stringify([PLAYGROUND_VERSION]),
     },
+  },
+  dev: {
+    progressBar: true,
+    writeToDisk: true,
+    watchFiles: []
   },
   server: {
     port: 3001,

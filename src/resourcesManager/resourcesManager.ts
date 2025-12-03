@@ -1,32 +1,79 @@
-/**
- * ResourcesManager - Manages Minecraft assets, textures, and block data.
- *
- * Handles loading and managing:
- * - Block and item atlases
- * - Block states and models
- * - Custom textures from resource packs
- * - Item rendering
- */
-
 import { EventEmitter } from 'events'
-import type { IndexedData } from 'minecraft-data'
 import TypedEmitter from 'typed-emitter'
+import blocksAtlases from 'mc-assets/dist/blocksAtlases.json'
+import itemsAtlases from 'mc-assets/dist/itemsAtlases.json'
+import itemDefinitionsJson from 'mc-assets/dist/itemDefinitions.json'
+import blocksAtlasLatest from 'mc-assets/dist/blocksAtlasLatest.png'
+import blocksAtlasLegacy from 'mc-assets/dist/blocksAtlasLegacy.png'
+import itemsAtlasLatest from 'mc-assets/dist/itemsAtlasLatest.png'
+import itemsAtlasLegacy from 'mc-assets/dist/itemsAtlasLegacy.png'
+import christmasPack from 'mc-assets/dist/textureReplacements/christmas'
+import { AtlasParser, ItemsAtlasesOutputJson } from 'mc-assets/dist/atlasParser'
+import worldBlockProvider, { WorldBlockProvider } from 'mc-assets/dist/worldBlockProvider'
+import { ItemsRenderer } from 'mc-assets/dist/itemsRenderer'
+import { getLoadedItemDefinitionsStore } from 'mc-assets'
 
-// ============================================================================
-// Types
-// ============================================================================
-
-export type McData = IndexedData
-
-export type ResourceManagerEvents = {
+type ResourceManagerEvents = {
   assetsTexturesUpdated: () => void
   assetsInventoryStarted: () => void
   assetsInventoryReady: () => void
 }
 
+export class LoadedResourcesTransferrable {
+  // todo transfer instead!
+  readonly sourceItemDefinitionsJson: any = itemDefinitionsJson
+  readonly itemsDefinitionsStore = getLoadedItemDefinitionsStore(this.sourceItemDefinitionsJson)
+
+  allReady = false
+  // Atlas parsers
+  itemsAtlasImage!: ImageBitmap
+  blocksAtlasImage!: ImageBitmap
+  blocksAtlasJson!: ItemsAtlasesOutputJson
+  // User data (specific to current resourcepack/version)
+  customBlockStates?: Record<string, any>
+  customModels?: Record<string, any>
+  /** array where the index represents the custom model data value, and the element at that index is the model path to use */
+  customItemModelNames: Record<string, string[]> = {}
+  customTextures: {
+    items?: { tileSize: number | undefined, textures: Record<string, HTMLImageElement> }
+    blocks?: { tileSize: number | undefined, textures: Record<string, HTMLImageElement> }
+    armor?: { tileSize: number | undefined, textures: Record<string, HTMLImageElement> }
+  } = {}
+  guiAtlas: { json: any, image: ImageBitmap } | null = null
+  guiAtlasVersion = 0
+
+  itemsRenderer: ItemsRenderer | undefined
+  worldBlockProvider?: WorldBlockProvider
+  blockstatesModels: any = null
+
+  version!: string
+  texturesVersion!: string
+
+  constructor(data?: any) {
+    if (data) {
+      Object.assign(this, data)
+      // this.itemsRenderer = new ItemsRenderer(
+      //   this.version,
+      //   this.blockstatesModels,
+      //   this.itemsAtlasParser,
+      //   this.blocksAtlasParser
+      // )
+    }
+  }
+
+  prepareForTransfer() {
+    delete this.itemsRenderer
+    delete this.worldBlockProvider
+    this.customTextures = {}
+    return this
+  }
+
+}
+
 export interface ResourcesCurrentConfig {
   version: string
   texturesVersion?: string
+  // noBlockstatesModels?: boolean
   noInventoryGui?: boolean
   includeOnlyBlocks?: string[]
 }
@@ -38,82 +85,20 @@ export interface UpdateAssetsRequest {
 export interface ResourcesManagerTransferred extends TypedEmitter<ResourceManagerEvents> {
   currentResources: LoadedResourcesTransferrable
 }
-
 export interface ResourcesManagerCommon extends TypedEmitter<ResourceManagerEvents> {
   currentResources: LoadedResourcesTransferrable | undefined
 }
 
-// ============================================================================
-// LoadedResourcesTransferrable
-// ============================================================================
-
-export class LoadedResourcesTransferrable {
-  allReady = false
-
-  // Atlas data
-  itemsAtlasImage?: ImageBitmap
-  blocksAtlasImage?: ImageBitmap
-  blocksAtlasJson?: any
-
-  // User data (specific to current resourcepack/version)
-  customBlockStates?: Record<string, any>
-  customModels?: Record<string, any>
-  /** Array where the index represents the custom model data value */
-  customItemModelNames: Record<string, string[]> = {}
-  customTextures: {
-    items?: { tileSize: number | undefined; textures: Record<string, HTMLImageElement> }
-    blocks?: { tileSize: number | undefined; textures: Record<string, HTMLImageElement> }
-    armor?: { tileSize: number | undefined; textures: Record<string, HTMLImageElement> }
-  } = {}
-
-  guiAtlas: { json: any; image: ImageBitmap } | null = null
-  guiAtlasVersion = 0
-
-  itemsRenderer?: any
-  worldBlockProvider?: any
-  blockstatesModels: any = null
-
-  version?: string
-  texturesVersion?: string
-
-  // Item definitions
-  sourceItemDefinitionsJson?: any
-  itemsDefinitionsStore?: any
-
-  constructor(data?: any) {
-    if (data) {
-      Object.assign(this, data)
-    }
-  }
-
-  prepareForTransfer(): this {
-    delete this.itemsRenderer
-    delete this.worldBlockProvider
-    this.customTextures = {}
-    return this
-  }
-}
-
-// ============================================================================
-// ResourcesManager
-// ============================================================================
-
 const STABLE_MODELS_VERSION = '1.21.4'
-
 export class ResourcesManager extends (EventEmitter as new () => TypedEmitter<ResourceManagerEvents>) {
   static restorerName = 'ResourcesManager'
 
-  /**
-   * Restore a ResourcesManager from transferred data in a worker.
-   */
-  static restoreTransferred(data: any, worker?: Worker): ResourcesManager {
+  static restoreTransferred(data: any, worker?: Worker) {
     const resourcesManager = new ResourcesManager()
-
-    const upResources = (data: any) => {
+    const upResources = (data) => {
       resourcesManager.currentResources = new LoadedResourcesTransferrable(data)
     }
     upResources(data.currentResources)
-
     if (worker) {
       worker.addEventListener('message', ({ data }) => {
         if (data.class === ResourcesManager.restorerName) {
@@ -130,31 +115,9 @@ export class ResourcesManager extends (EventEmitter as new () => TypedEmitter<Re
     return resourcesManager
   }
 
-  // Source data (imported, not changing)
-  sourceBlockStatesModels: any = null
-  sourceBlocksAtlases: any = null
-  sourceItemsAtlases: any = null
-
-  currentResources: LoadedResourcesTransferrable | undefined
-  itemsAtlasParser?: any
-  blocksAtlasParser?: any
-  currentConfig: ResourcesCurrentConfig | undefined
-  abortController = new AbortController()
-
-  // Minecraft data for current version
-  mcData?: McData
-
-  private _promiseAssetsReadyResolvers = Promise.withResolvers<void>()
-
-  get promiseAssetsReady(): Promise<void> {
-    return this._promiseAssetsReadyResolvers.promise
-  }
-
-  /**
-   * Prepare this ResourcesManager for transfer to a worker thread.
-   */
-  prepareForTransfer(worker?: Worker): { __restorer: string; currentResources: LoadedResourcesTransferrable | undefined } {
+  prepareForTransfer(worker?: Worker) {
     if (worker) {
+      // todo do it automatically
       const oldEmit = this.emit.bind(this) as any
       this.emit = ((eventName: keyof ResourceManagerEvents, ...args: any[]) => {
         oldEmit(eventName, ...args)
@@ -164,6 +127,7 @@ export class ResourcesManager extends (EventEmitter as new () => TypedEmitter<Re
           eventName,
           args,
         })
+        // todo handle assetsInventoryReady
         if (eventName === 'assetsTexturesUpdated' || eventName === 'assetsInventoryReady') {
           worker.postMessage({
             class: ResourcesManager.restorerName,
@@ -179,42 +143,34 @@ export class ResourcesManager extends (EventEmitter as new () => TypedEmitter<Re
     }
   }
 
-  /**
-   * Load source data for a specific version.
-   */
-  async loadSourceData(version: string): Promise<void> {
-    // Load minecraft data if not already loaded or version changed
-    if (!this.mcData || this.mcData.version?.minecraftVersion !== version) {
-      try {
-        // Try to use MinecraftData if available
-        if (typeof require !== 'undefined') {
-          const MinecraftData = require('minecraft-data')
-          this.mcData = MinecraftData(version)
-        } else {
-          // Fallback to global mcData if in browser
-          this.mcData = (globalThis as any).mcData
-        }
-      } catch (error) {
-        console.warn('Failed to load minecraft data:', error)
-        // Use global fallback
-        this.mcData = (globalThis as any).mcData
-      }
-    }
+  // Source data (imported, not changing)
+  sourceBlockStatesModels: any = null
+  readonly sourceBlocksAtlases: any = blocksAtlases
+  readonly sourceItemsAtlases: any = itemsAtlases
+
+  currentResources: LoadedResourcesTransferrable | undefined
+  itemsAtlasParser!: AtlasParser
+  blocksAtlasParser!: AtlasParser
+  currentConfig: ResourcesCurrentConfig | undefined
+  abortController = new AbortController()
+  _promiseAssetsReadyResolvers = Promise.withResolvers<void>()
+  get promiseAssetsReady() {
+    return this._promiseAssetsReadyResolvers.promise
   }
 
-  resetResources(): void {
+  async loadSourceData(version: string) {
+    // TODO
+    this.sourceBlockStatesModels ??= (await import('mc-assets/dist/blockStatesModels.json')).default
+  }
+
+  resetResources() {
     this.currentResources = new LoadedResourcesTransferrable()
   }
 
-  /**
-   * Update assets data for the current config.
-   */
-  async updateAssetsData(request: UpdateAssetsRequest, unstableSkipEvent = false): Promise<void> {
+  async updateAssetsData(request: UpdateAssetsRequest, unstableSkipEvent = false) {
     if (!this.currentConfig) throw new Error('No config loaded')
-
     this._promiseAssetsReadyResolvers = Promise.withResolvers()
     const abortController = new AbortController()
-
     await this.loadSourceData(this.currentConfig.version)
     if (abortController.signal.aborted) return
 
@@ -226,31 +182,40 @@ export class ResourcesManager extends (EventEmitter as new () => TypedEmitter<Re
       blockstates: {},
       models: {}
     }
-
+    // todo-low resolve version
     resources.blockstatesModels.blockstates.latest = {
-      ...this.sourceBlockStatesModels?.blockstates?.latest,
+      ...this.sourceBlockStatesModels.blockstates.latest,
       ...resources.customBlockStates
     }
 
     resources.blockstatesModels.models.latest = {
-      ...this.sourceBlockStatesModels?.models?.latest,
+      ...this.sourceBlockStatesModels.models.latest,
       ...resources.customModels
     }
 
-    if (abortController.signal.aborted) return
-
-    // Override recreateBlockAtlas and recreateItemsAtlas in app-specific implementation
+    console.time('recreateAtlases')
     await Promise.all([
       this.recreateBlockAtlas(resources),
       this.recreateItemsAtlas(resources)
     ])
+    console.timeEnd('recreateAtlases')
+
+    if (abortController.signal.aborted) return
+
+    if (resources.version && resources.blockstatesModels && this.itemsAtlasParser && this.blocksAtlasParser) {
+      resources.itemsRenderer = new ItemsRenderer(
+        resources.version,
+        resources.blockstatesModels,
+        this.itemsAtlasParser,
+        this.blocksAtlasParser
+      )
+    }
 
     if (abortController.signal.aborted) return
 
     this.currentResources = resources
     resources.allReady = true
-
-    if (!unstableSkipEvent) {
+    if (!unstableSkipEvent) { // todo rework resourcepack optimization
       this.emit('assetsTexturesUpdated')
     }
 
@@ -268,28 +233,80 @@ export class ResourcesManager extends (EventEmitter as new () => TypedEmitter<Re
     }
   }
 
-  /**
-   * Override in app-specific implementation to recreate block atlas.
-   */
-  async recreateBlockAtlas(resources: LoadedResourcesTransferrable): Promise<void> {
-    // Override this in app-specific implementation
+  async recreateBlockAtlas(resources: LoadedResourcesTransferrable = this.currentResources!) {
+    const blockTexturesChanges = {} as Record<string, string>
+    const date = new Date()
+    if ((date.getMonth() === 11 && date.getDate() >= 24) || (date.getMonth() === 0 && date.getDate() <= 6)) {
+      Object.assign(blockTexturesChanges, christmasPack)
+    }
+
+    const blocksAssetsParser = new AtlasParser(this.sourceBlocksAtlases, blocksAtlasLatest, blocksAtlasLegacy)
+
+    const customBlockTextures = Object.keys(resources.customTextures.blocks?.textures ?? {})
+    console.time('createBlocksAtlas')
+    const { atlas: blocksAtlas, canvas: blocksCanvas } = await blocksAssetsParser.makeNewAtlas(
+      resources.texturesVersion,
+      (textureName) => {
+        if (this.currentConfig!.includeOnlyBlocks && !this.currentConfig!.includeOnlyBlocks.includes(textureName)) return false
+        const texture = resources.customTextures.blocks?.textures[textureName]
+        return blockTexturesChanges[textureName] ?? texture
+      },
+      undefined,
+      undefined,
+      customBlockTextures,
+      {
+        needHorizontalIndexes: !!this.currentConfig!.includeOnlyBlocks,
+      }
+    )
+    console.timeEnd('createBlocksAtlas')
+
+    this.blocksAtlasParser = new AtlasParser({ latest: blocksAtlas }, blocksCanvas.toDataURL())
+    resources.blocksAtlasImage = await createImageBitmap(blocksCanvas)
+    resources.blocksAtlasJson = this.blocksAtlasParser.atlas.latest
+
+    resources.worldBlockProvider = worldBlockProvider(
+      resources.blockstatesModels,
+      this.blocksAtlasParser.atlas,
+      STABLE_MODELS_VERSION
+    )
   }
 
-  /**
-   * Override in app-specific implementation to recreate items atlas.
-   */
-  async recreateItemsAtlas(resources: LoadedResourcesTransferrable): Promise<void> {
-    // Override this in app-specific implementation
+  async recreateItemsAtlas(resources: LoadedResourcesTransferrable = this.currentResources!) {
+    const itemsAssetsParser = new AtlasParser(this.sourceItemsAtlases, itemsAtlasLatest, itemsAtlasLegacy)
+    const customItemTextures = Object.keys(resources.customTextures.items?.textures ?? {})
+    const { atlas: itemsAtlas, canvas: itemsCanvas } = await itemsAssetsParser.makeNewAtlas(
+      resources.texturesVersion,
+      (textureName) => {
+        const texture = resources.customTextures.items?.textures[textureName]
+        if (!texture) return
+        return texture
+      },
+      resources.customTextures.items?.tileSize,
+      undefined,
+      customItemTextures
+    )
+
+    this.itemsAtlasParser = new AtlasParser({ latest: itemsAtlas }, itemsCanvas.toDataURL())
+    resources.itemsAtlasImage = await createImageBitmap(itemsCanvas)
   }
 
-  /**
-   * Override in app-specific implementation to generate GUI textures.
-   */
-  async generateGuiTextures(): Promise<void> {
-    // Override this in app-specific implementation
+  async generateGuiTextures() {
+    // TODO!
+    // await generateGuiAtlas()
   }
 
-  destroy(): void {
+  async downloadDebugAtlas(isItems = false) {
+    const resources = this.currentResources
+    if (!resources) throw new Error('No resources loaded')
+    const atlasParser = (isItems ? this.itemsAtlasParser : this.blocksAtlasParser)!
+    const dataUrl = await atlasParser.createDebugImage(true)
+    const a = document.createElement('a')
+    a.href = dataUrl
+    a.download = `atlas-debug-${isItems ? 'items' : 'blocks'}.png`
+    a.click()
+  }
+
+  destroy() {
     this.abortController.abort()
     this.currentResources = undefined
     this.abortController = new AbortController()

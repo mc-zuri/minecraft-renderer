@@ -6,6 +6,8 @@
 
 import { WorldRendererConfig } from '@/lib/worldrendererCommon'
 import { PlayerStateReactive } from '@/playerState/playerState'
+import { ResourcesManagerTransferred } from '@/resourcesManager'
+import { WorldViewWorker } from '@/worldView'
 import { Vec3 } from 'vec3'
 
 // ============================================================================
@@ -85,7 +87,7 @@ export interface RendererReactiveState {
 
 /** Graphics initialization options */
 export interface GraphicsInitOptions<S = any> {
-  resourcesManager: ResourcesManagerLike
+  resourcesManager: ResourcesManagerTransferred
   config: GraphicsBackendConfig
   rendererSpecificSettings: S
   callbacks: {
@@ -97,16 +99,12 @@ export interface GraphicsInitOptions<S = any> {
 
 /** Display world options for starting world rendering */
 export interface DisplayWorldOptions {
-  worldView: WorldViewLike
-  playerState?: PlayerStateReactive
-  playerStateReactive?: PlayerStateReactive
-  rendererState?: RendererReactiveState
-  nonReactiveState: NonReactiveState
-  inWorldRenderingConfig: WorldRendererConfig
   version: string
-  callbacks?: {
-    worldReady?: () => void
-  }
+  worldView: WorldViewWorker
+  inWorldRenderingConfig: WorldRendererConfig
+  playerStateReactive: PlayerStateReactive
+  rendererState: RendererReactiveState
+  nonReactiveState: NonReactiveState
 }
 
 /** Graphics backend interface */
@@ -126,22 +124,6 @@ export interface GraphicsBackend {
 /** Graphics backend loader function type */
 export type GraphicsBackendLoader = ((options: GraphicsInitOptions) => MaybePromise<GraphicsBackend>) & {
   id: string
-}
-
-// ============================================================================
-// Resource Manager Interface
-// ============================================================================
-
-/** Resources manager interface for type compatibility */
-export interface ResourcesManagerLike {
-  currentConfig?: {
-    version: string
-    noInventoryGui?: boolean
-  }
-  currentResources?: any
-  loadSourceData?(version: string): Promise<void>
-  updateAssetsData?(request: any): Promise<void>
-  on?(event: string, callback: (...args: any[]) => void): void
 }
 
 // ============================================================================
