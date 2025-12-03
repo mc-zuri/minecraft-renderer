@@ -2,34 +2,37 @@
     "compilerOptions": {
         "target": "ES2022",
         "module": "ESNext",
-        "moduleResolution": "bundler",
+        "moduleResolution": "Node",
         "lib": [
             "ES2024",
             "DOM",
             "DOM.Iterable"
         ],
         "strict": true,
-        "esModuleInterop": true,
         "skipLibCheck": true,
         "forceConsistentCasingInFileNames": true,
-        "declaration": true,
-        "declarationMap": true,
-        "sourceMap": true,
-        "outDir": "./dist",
-        "rootDir": "./src",
+        "noEmit": true,
+        // "noEmit": false,
+        // "declaration": true,
+        // "declarationMap": true,
+        // "sourceMap": true,
+        // "outDir": "./dist",
+        // "rootDir": "./src",
         "resolveJsonModule": true,
         "allowSyntheticDefaultImports": true,
         "experimentalDecorators": true,
         "emitDecoratorMetadata": true,
         "noImplicitAny": false,
         "useUnknownInCatchVariables": false,
-        "noEmit": false,
+        "allowUnreachableCode": true,
         "jsx": "react-jsx",
         "paths": {
             "@/*": [
                 "./src/*"
             ]
-        }
+        },
+        "allowJs": true,
+        "maxNodeModuleJsDepth": 1
     },
     "include": [
         "src/**/*"

@@ -1,4 +1,3 @@
-import { BlockNames } from '../../../../../src/mcDataTypes'
 import { setup } from './mesherTester'
 
 const addPositions = [

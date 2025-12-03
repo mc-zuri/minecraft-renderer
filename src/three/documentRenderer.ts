@@ -100,7 +100,11 @@ class TopRightStats {
     dom.style.width = '80px'
     dom.style.zIndex = '1'
     dom.style.opacity = '0.8'
-    const container = document.getElementById('corner-indicator-stats') ?? document.body
+    const hasAppContainer = document.getElementById('corner-indicator-stats')
+    const container = hasAppContainer ?? document.body
+    if (hasAppContainer) {
+      dom.style.position = 'relative'
+    }
     container.appendChild(dom)
     this.total += size
   }
@@ -109,7 +113,6 @@ class TopRightStats {
     const hasRamPanel = this.stats2.dom.children.length === 3
 
     this.addStat(this.stats.dom)
-    this.stats.dom.style.position = 'relative'
     if (hasRamPanel) {
       this.addStat(this.stats2.dom)
     }

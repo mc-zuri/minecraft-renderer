@@ -113,7 +113,7 @@ importers:
         specifier: ^4.17.21
         version: 4.17.21
       mc-assets:
-        specifier: ^0.2.62
+        specifier: ^0.2.72
         version: 0.2.72
       minecraft-data:
         specifier: 3.98.0
