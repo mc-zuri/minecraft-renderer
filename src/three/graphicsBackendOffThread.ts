@@ -49,7 +49,7 @@ export const createGraphicsBackendOffThread: GraphicsBackendLoader = async (init
     // startPanorama: proxy.startPanorama,
     async startPanorama() { },
     async startWorld(options) {
-      meshersSendMcData([worker], options.version, [...dynamicMcDataFiles, 'items', 'itemsArray', 'entitiesByName', 'blocksByStateId'])
+      meshersSendMcData([worker], options.version, [...dynamicMcDataFiles, 'items', 'itemsArray', 'entitiesByName', 'blocksByStateId'], initOptions.resourcesManager.currentResources.mcData)
 
       options.inWorldRenderingConfig['__syncToWorker'] = true
 

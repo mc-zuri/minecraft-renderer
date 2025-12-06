@@ -8,18 +8,19 @@
     "types": "./dist/index.d.ts",
     "files": [
         "dist",
-        "src"
+        "src",
+        "logo.webp"
     ],
     "scripts": {
-        "build": "pnpm build:all",
-        "build:all": "run-s build:lib build-mesher build:playground",
+        "build": "pnpm build:publish",
+        "build:publish": "run-s build:lib build:mesher",
         "build:lib": "node scripts/buildLib.mjs",
         "build:lib:minify": "node scripts/buildLib.mjs --minify",
         "watch:lib": "node scripts/buildLib.mjs -w",
-        "build-mesher": "node scripts/buildMesherWorker.mjs",
-        "watch-mesher": "pnpm build-mesher -w",
+        "build:mesher": "node scripts/buildMesherWorker.mjs",
+        "watch:mesher": "pnpm build:mesher -w",
         "build:playground": "rsbuild build --config rsbuild.config.ts",
-        "dev": "run-p watch-mesher dev:playground",
+        "dev": "run-p watch:mesher dev:playground",
         "dev:playground": "rsbuild dev --config rsbuild.config.ts",
         "typecheck": "tsc --noEmit"
     },

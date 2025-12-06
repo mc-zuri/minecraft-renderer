@@ -1,7 +1,6 @@
 /* eslint-disable guard-for-in */
 import { EventEmitter } from 'events'
 import { Vec3 } from 'vec3'
-import mcDataRaw from 'minecraft-data/data.js' // note: using alias
 import TypedEmitter from 'typed-emitter'
 import { WorldBlockProvider } from 'mc-assets/dist/worldBlockProvider'
 import { subscribeKey } from 'valtio/utils'
@@ -19,6 +18,7 @@ import { MesherLogReader } from './mesherlogReader'
 import { setSkinsConfig } from './utils/skins'
 import { generateSpiralMatrix, WorldViewWorker } from '../worldView'
 import { PlayerStateReactive } from '../playerState/playerState'
+import { IndexedData } from 'minecraft-data'
 
 function mod(x, n) {
   return ((x % n) + n) % n
@@ -589,7 +589,7 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
   }
 
   sendMesherMcData() {
-    const allMcData = mcDataRaw.pc[this.version] ?? mcDataRaw.pc[toMajorVersion(this.version)]
+    const allMcData = this.resourcesManager.currentResources.mcData
     const mcData = {
       version: JSON.parse(JSON.stringify(allMcData.version))
     }
@@ -1073,13 +1073,12 @@ export const initMesherWorker = (onGotMessage: (data: any) => void) => {
   return worker
 }
 
-export const meshersSendMcData = (workers: Worker[], version: string, mcDataKeys: string[] = dynamicMcDataFiles) => {
-  const allMcData = mcDataRaw.pc[version] ?? mcDataRaw.pc[toMajorVersion(version)]
+export const meshersSendMcData = (workers: Worker[], version: string, mcDataKeys: string[] = dynamicMcDataFiles, mcDataFull: IndexedData) => {
   const mcData = {
-    version: JSON.parse(JSON.stringify(allMcData.version))
+    version: JSON.parse(JSON.stringify(mcDataFull.version))
   }
   for (const key of mcDataKeys) {
-    mcData[key] = allMcData[key]
+    mcData[key] = mcDataFull[key]
   }
 
   for (const worker of workers) {

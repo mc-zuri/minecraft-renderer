@@ -7,6 +7,7 @@ import WorldLoader from 'prismarine-world'
 import { proxy } from 'valtio'
 import { BlockNames } from 'mc-bridge/dist/names.generated'
 
+//@ts-ignore
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 // eslint-disable-next-line import/no-named-as-default
 import GUI from 'lil-gui'

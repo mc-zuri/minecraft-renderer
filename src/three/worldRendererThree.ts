@@ -31,15 +31,20 @@ import { CinimaticScriptRunner, CinimaticScript } from './cinimaticScript'
 import { DEFAULT_TEMPERATURE, SkyboxRenderer } from './skyboxRenderer'
 import { FireworksManager } from './fireworks'
 import { downloadWorldGeometry } from './worldGeometryExport'
+import { WorldBlockGeometry } from './worldBlockGeometry'
+import type { RendererModuleManifest, RegisteredModule } from './rendererModuleSystem'
+import { BUILTIN_MODULES } from './modules/index'
 
 type SectionKey = string
 
 export class WorldRendererThree extends WorldRendererCommon {
   outputFormat = 'threeJs' as const
-  sectionObjects: Record<string, THREE.Object3D & { foutain?: boolean }> = {}
+  worldBlockGeometry: WorldBlockGeometry
+  get sectionObjects() {
+    return this.worldBlockGeometry.sectionObjects
+  }
   chunkTextures = new Map<string, { [pos: string]: THREE.Texture }>()
   signsCache = new Map<string, any>()
-  starField: StarField
   cameraSectionPos: Vec3 = new Vec3(0, 0, 0)
   holdingBlock: HoldingBlock
   holdingBlockLeft: HoldingBlock
@@ -55,13 +60,19 @@ export class WorldRendererThree extends WorldRendererCommon {
   cameraShake: CameraShake
   cameraContainer!: THREE.Object3D
   media: ThreeJsMedia
-  waitingChunksToDisplay = {} as { [chunkKey: string]: SectionKey[] }
+  get waitingChunksToDisplay() {
+    return this.worldBlockGeometry.waitingChunksToDisplay
+  }
   waypoints: WaypointsRenderer
   cinimaticScript: CinimaticScriptRunner
   camera!: THREE.PerspectiveCamera
   renderTimeAvg = 0
   // Memory usage tracking (in bytes)
-  estimatedMemoryUsage = 0
+  get estimatedMemoryUsage() {
+    return this.worldBlockGeometry.estimatedMemoryUsage
+  }
+  // Module system
+  private modules = new Map<string, RegisteredModule>()
   sectionsOffsetsAnimations = {} as {
     [chunkKey: string]: {
       time: number,
@@ -102,10 +113,18 @@ export class WorldRendererThree extends WorldRendererCommon {
 
     this.renderer = renderer
     displayOptions.rendererState.renderer = WorldRendererThree.getRendererInfo(renderer) ?? '...'
-    this.starField = new StarField(this)
+
+    // Initialize world block geometry handler
+    this.worldBlockGeometry = new WorldBlockGeometry(this, this.scene, this.material, displayOptions)
+
     this.cursorBlock = new CursorBlock(this)
     this.holdingBlock = new HoldingBlock(this)
     this.holdingBlockLeft = new HoldingBlock(this, true)
+
+    // Register built-in modules
+    for (const manifest of Object.values(BUILTIN_MODULES)) {
+      this.registerModule(manifest as RendererModuleManifest)
+    }
 
     // Initialize skybox renderer
     this.skyboxRenderer = new SkyboxRenderer(this.scene, false, null)
@@ -141,6 +160,111 @@ export class WorldRendererThree extends WorldRendererCommon {
       this.finishChunk(chunkKey)
     })
     this.worldSwitchActions()
+
+    // Initialize modules
+    this.initializeModules()
+  }
+
+  /**
+   * Register a renderer module
+   */
+  registerModule(manifest: RendererModuleManifest): void {
+    if (this.modules.has(manifest.id)) {
+      console.warn(`Module ${manifest.id} is already registered`)
+      return
+    }
+
+    const controller = new manifest.controller(this)
+    const registered: RegisteredModule = {
+      manifest,
+      controller,
+      enabled: manifest.enabledDefault ?? false,
+    }
+
+    this.modules.set(manifest.id, registered)
+
+    // Auto-enable if default is true
+    if (manifest.enabledDefault) {
+      this.enableModule(manifest.id)
+    }
+  }
+
+  /**
+   * Enable a module
+   */
+  enableModule(moduleId: string): void {
+    const module = this.modules.get(moduleId)
+    if (!module) {
+      console.warn(`Module ${moduleId} not found`)
+      return
+    }
+
+    if (module.enabled) return
+
+    module.enabled = true
+    module.controller.enable()
+
+    // Register render callback if provided
+    if (module.controller.render) {
+      this.onRender.push(module.controller.render)
+    }
+  }
+
+  /**
+   * Disable a module
+   */
+  disableModule(moduleId: string): void {
+    const module = this.modules.get(moduleId)
+    if (!module) {
+      console.warn(`Module ${moduleId} not found`)
+      return
+    }
+
+    if (module.manifest.cannotBeDisabled) {
+      console.warn(`Module ${moduleId} cannot be disabled`)
+      return
+    }
+
+    if (!module.enabled) return
+
+    module.enabled = false
+    module.controller.disable()
+
+    // Unregister render callback if provided
+    if (module.controller.render) {
+      const index = this.onRender.indexOf(module.controller.render)
+      if (index > -1) {
+        this.onRender.splice(index, 1)
+      }
+    }
+  }
+
+  /**
+   * Dispose all modules
+   */
+  private disposeModules(): void {
+    for (const module of this.modules.values()) {
+      module.controller.dispose()
+    }
+    this.modules.clear()
+  }
+
+  /**
+   * Initialize all registered modules
+   */
+  private initializeModules(): void {
+    for (const [id, module] of this.modules.entries()) {
+      if (module.enabled) {
+        this.enableModule(id)
+      }
+    }
+  }
+
+  /**
+   * Get a module controller by ID
+   */
+  getModule<T = any>(moduleId: string): T | undefined {
+    return this.modules.get(moduleId)?.controller as T | undefined
   }
 
   get cameraObject() {
@@ -294,13 +418,10 @@ export class WorldRendererThree extends WorldRendererCommon {
   }
 
   timeUpdated(newTime: number): void {
-    const nightTime = 13_500
-    const morningStart = 23_000
-    const displayStars = newTime > nightTime && newTime < morningStart
-    if (displayStars) {
-      this.starField.addToScene()
-    } else {
-      this.starField.remove()
+    // Update starfield module with time
+    const starfieldModule = this.getModule<any>('starfield')
+    if (starfieldModule?.updateTimeOfDay) {
+      starfieldModule.updateTimeOfDay(newTime)
     }
 
     this.skyboxRenderer.updateTime(newTime)
@@ -400,182 +521,15 @@ export class WorldRendererThree extends WorldRendererCommon {
   }
 
   finishChunk(chunkKey: string) {
-    for (const sectionKey of this.waitingChunksToDisplay[chunkKey] ?? []) {
-      this.sectionObjects[sectionKey].visible = true
-    }
-    delete this.waitingChunksToDisplay[chunkKey]
+    this.worldBlockGeometry.finishChunk(chunkKey)
   }
 
-  // debugRecomputedDeletedObjects = 0
   handleWorkerMessage(data: { geometry: MesherGeometryOutput, key, type }): void {
-    if (data.type !== 'geometry') return
-    let object: THREE.Object3D = this.sectionObjects[data.key]
-    if (object) {
-      // Track memory usage removal for existing section
-      this.removeSectionMemoryUsage(object)
-      // Cleanup banner textures before disposing
-      object.traverse((child) => {
-        if ((child as any).bannerTexture) {
-          releaseBannerTexture((child as any).bannerTexture)
-        }
-      })
-      this.scene.remove(object)
-      disposeObject(object)
-      delete this.sectionObjects[data.key]
-    }
-
-    const chunkCoords = data.key.split(',')
-    if (!this.loadedChunks[chunkCoords[0] + ',' + chunkCoords[2]] || !data.geometry.positions.length || !this.active) return
-
-    // if (object) {
-    //   this.debugRecomputedDeletedObjects++
-    // }
-
-    const geometry = new THREE.BufferGeometry()
-    const positionAttr = new THREE.BufferAttribute(data.geometry.positions, 3)
-    const normalAttr = new THREE.BufferAttribute(data.geometry.normals, 3)
-    const colorAttr = new THREE.BufferAttribute(data.geometry.colors, 3)
-    const uvAttr = new THREE.BufferAttribute(data.geometry.uvs, 2)
-    const indexAttr = new THREE.BufferAttribute(data.geometry.indices as Uint32Array | Uint16Array, 1)
-
-    geometry.setAttribute('position', positionAttr)
-    geometry.setAttribute('normal', normalAttr)
-    geometry.setAttribute('color', colorAttr)
-    geometry.setAttribute('uv', uvAttr)
-    geometry.index = indexAttr
-
-    // Track memory usage for this section (before disposing CPU arrays)
-    this.addSectionMemoryUsage(geometry)
-
-    // Force GPU upload and then dispose CPU arrays to free RAM
-    this.disposeCpuArraysAfterGpuUpload(geometry)
-
-    const mesh = new THREE.Mesh(geometry, this.material)
-    mesh.position.set(data.geometry.sx, data.geometry.sy, data.geometry.sz)
-    mesh.name = 'mesh'
-    object = new THREE.Group()
-    object.add(mesh)
-    // mesh with static dimensions: 16x16x16
-    const staticChunkMesh = new THREE.Mesh(new THREE.BoxGeometry(16, 16, 16), new THREE.MeshBasicMaterial({ color: 0x00_00_00, transparent: true, opacity: 0 }))
-    staticChunkMesh.position.set(data.geometry.sx, data.geometry.sy, data.geometry.sz)
-    const boxHelper = new THREE.BoxHelper(staticChunkMesh, 0xff_ff_00)
-    boxHelper.name = 'helper'
-    object.add(boxHelper)
-    object.name = 'chunk';
-    (object as any).tilesCount = data.geometry.positions.length / 3 / 4;
-    (object as any).blocksCount = data.geometry.blocksCount
-    if (!this.displayOptions.inWorldRenderingConfig.showChunkBorders) {
-      boxHelper.visible = false
-    }
-    // should not compute it once
-    if (Object.keys(data.geometry.signs).length) {
-      for (const [posKey, { isWall, isHanging, rotation }] of Object.entries(data.geometry.signs)) {
-        const signBlockEntity = this.blockEntities[posKey]
-        if (!signBlockEntity) continue
-        const [x, y, z] = posKey.split(',')
-        const sign = this.renderSign(new Vec3(+x, +y, +z), rotation, isWall, isHanging, nbt.simplify(signBlockEntity))
-        if (!sign) continue
-        object.add(sign)
-      }
-    }
-    if (Object.keys(data.geometry.heads).length) {
-      for (const [posKey, { isWall, rotation }] of Object.entries(data.geometry.heads)) {
-        const headBlockEntity = this.blockEntities[posKey]
-        if (!headBlockEntity) continue
-        const [x, y, z] = posKey.split(',')
-        const head = this.renderHead(new Vec3(+x, +y, +z), rotation, isWall, nbt.simplify(headBlockEntity))
-        if (!head) continue
-        object.add(head)
-      }
-    }
-    if (Object.keys(data.geometry.banners).length) {
-      for (const [posKey, { isWall, rotation, blockName }] of Object.entries(data.geometry.banners)) {
-        const bannerBlockEntity = this.blockEntities[posKey]
-        if (!bannerBlockEntity) continue
-        const [x, y, z] = posKey.split(',')
-        const bannerTexture = getBannerTexture(this, blockName, nbt.simplify(bannerBlockEntity))
-        if (!bannerTexture) continue
-        const banner = createBannerMesh(new Vec3(+x, +y, +z), rotation, isWall, bannerTexture)
-        object.add(banner)
-      }
-    }
-    this.sectionObjects[data.key] = object
-    if (this.displayOptions.inWorldRenderingConfig._renderByChunks) {
-      object.visible = false
-      const chunkKey = `${chunkCoords[0]},${chunkCoords[2]}`
-      this.waitingChunksToDisplay[chunkKey] ??= []
-      this.waitingChunksToDisplay[chunkKey].push(data.key)
-      if (this.finishedChunks[chunkKey]) {
-        // todo it might happen even when it was not an update
-        this.finishChunk(chunkKey)
-      }
-    }
-
-    this.updatePosDataChunk(data.key)
-    object.matrixAutoUpdate = false
-    mesh.onAfterRender = (renderer, scene, camera, geometry, material, group) => {
-      // mesh.matrixAutoUpdate = false
-    }
-
-    this.scene.add(object)
-  }
-
-  /**
-   * Dispose CPU arrays after GPU upload to reduce RAM usage
-   */
-  private disposeCpuArraysAfterGpuUpload(geometry: THREE.BufferGeometry): void {
-    // Set up callbacks to dispose CPU arrays after GPU upload
-    // Three.js will automatically upload to GPU on first render
-    const { attributes } = geometry
-    for (const attributeName of Object.keys(attributes)) {
-      const attribute = attributes[attributeName]
-      if (attribute instanceof THREE.InterleavedBufferAttribute) continue
-      if (attribute.onUploadCallback) {
-        // If there's already a callback, chain it
-        const existingCallback = attribute.onUploadCallback
-        attribute.onUploadCallback = () => {
-          existingCallback()
-          this.disposeCpuArray(attribute)
-        }
-      } else {
-        attribute.onUploadCallback = () => this.disposeCpuArray(attribute)
-      }
-      // Force the upload callback by marking as needing update
-      attribute.needsUpdate = true
-    }
-
-    // Handle index attribute
-    if (geometry.index) {
-      if (geometry.index.onUploadCallback) {
-        const existingCallback = geometry.index.onUploadCallback
-        geometry.index.onUploadCallback = () => {
-          existingCallback()
-          this.disposeCpuArray(geometry.index!)
-        }
-      } else {
-        geometry.index.onUploadCallback = () => this.disposeCpuArray(geometry.index!)
-      }
-      geometry.index.needsUpdate = true
+    if (data.type === 'geometry') {
+      this.worldBlockGeometry.handleWorkerGeometryMessage(data)
     }
   }
 
-  /**
-   * Dispose CPU array data from buffer attribute
-   */
-  private disposeCpuArray(attribute: THREE.BufferAttribute): void {
-    // Clear the CPU array reference to free memory
-    // Note: This makes the attribute read-only from CPU side
-    if (attribute.array) {
-      // Store original array type for potential recreation
-      // attribute.userData = attribute.userData || {}
-      // attribute.userData.originalArrayType = attribute.array.constructor.name
-      // attribute.userData.originalLength = attribute.array.length
-      // attribute.userData.originalItemSize = attribute.itemSize
-
-      // Clear the array reference
-      ; (attribute as any).array = null
-    }
-  }
 
   getSignTexture(position: Vec3, blockEntity, isHanging, backSide = false) {
     const chunk = chunkPos(position)
@@ -1036,14 +990,7 @@ export class WorldRendererThree extends WorldRendererCommon {
   resetWorld() {
     super.resetWorld()
 
-    for (const mesh of Object.values(this.sectionObjects)) {
-      // Track memory usage removal for all sections
-      this.removeSectionMemoryUsage(mesh)
-      this.scene.remove(mesh)
-    }
-
-    // Reset memory tracking since all sections are cleared
-    this.estimatedMemoryUsage = 0
+    this.worldBlockGeometry.resetWorld()
 
     // Clean up debug objects
     if (this.debugRaycastHelper) {
@@ -1096,24 +1043,7 @@ export class WorldRendererThree extends WorldRendererCommon {
     super.removeColumn(x, z)
 
     this.cleanChunkTextures(x, z)
-    for (let y = this.worldSizeParams.minY; y < this.worldSizeParams.worldHeight; y += 16) {
-      this.setSectionDirty(new Vec3(x, y, z), false)
-      const key = `${x},${y},${z}`
-      const mesh = this.sectionObjects[key]
-      if (mesh) {
-        // Track memory usage removal
-        this.removeSectionMemoryUsage(mesh)
-        // Cleanup banner textures before disposing
-        mesh.traverse((child) => {
-          if ((child as any).bannerTexture) {
-            releaseBannerTexture((child as any).bannerTexture)
-          }
-        })
-        this.scene.remove(mesh)
-        disposeObject(mesh)
-      }
-      delete this.sectionObjects[key]
-    }
+    this.worldBlockGeometry.removeColumn(x, z)
   }
 
   setSectionDirty(...args: Parameters<WorldRendererCommon['setSectionDirty']>) {
@@ -1136,6 +1066,7 @@ export class WorldRendererThree extends WorldRendererCommon {
   }
 
   destroy(): void {
+    this.disposeModules()
     this.fireworksLegacy.destroy()
     super.destroy()
     this.skyboxRenderer.dispose()
@@ -1210,172 +1141,9 @@ export class WorldRendererThree extends WorldRendererCommon {
   }
 
   /**
-   * Estimate memory usage of BufferGeometry attributes
-   */
-  private estimateGeometryMemoryUsage(geometry: THREE.BufferGeometry): number {
-    let memoryBytes = 0
-
-    // Calculate memory for each attribute
-    const { attributes } = geometry
-    for (const [name, attribute] of Object.entries(attributes)) {
-      if (attribute?.array) {
-        // Each number in typed arrays takes different bytes:
-        // Float32Array: 4 bytes per number
-        // Uint32Array: 4 bytes per number
-        // Uint16Array: 2 bytes per number
-        const bytesPerElement = attribute.array.BYTES_PER_ELEMENT
-        memoryBytes += attribute.array.length * bytesPerElement
-      }
-    }
-
-    // Calculate memory for indices
-    if (geometry.index?.array) {
-      const bytesPerElement = geometry.index.array.BYTES_PER_ELEMENT
-      memoryBytes += geometry.index.array.length * bytesPerElement
-    }
-
-    return memoryBytes
-  }
-
-  /**
-   * Update memory usage when section is added
-   */
-  private addSectionMemoryUsage(geometry: THREE.BufferGeometry): void {
-    const memoryUsage = this.estimateGeometryMemoryUsage(geometry)
-    this.estimatedMemoryUsage += memoryUsage
-  }
-
-  /**
-   * Update memory usage when section is removed
-   */
-  private removeSectionMemoryUsage(object: THREE.Object3D): void {
-    // Find mesh with geometry in the object
-    const mesh = object.children.find(child => child.name === 'mesh') as THREE.Mesh
-    if (mesh?.geometry) {
-      const memoryUsage = this.estimateGeometryMemoryUsage(mesh.geometry)
-      this.estimatedMemoryUsage -= memoryUsage
-      this.estimatedMemoryUsage = Math.max(0, this.estimatedMemoryUsage) // Ensure non-negative
-    }
-  }
-
-  /**
    * Get estimated memory usage in a human-readable format
    */
   getEstimatedMemoryUsage(): { bytes: number; readable: string } {
-    const bytes = this.estimatedMemoryUsage
-    const mb = bytes / (1024 * 1024)
-    const readable = `${mb.toFixed(2)} MB`
-    return { bytes, readable }
-  }
-}
-
-class StarField {
-  points?: THREE.Points
-  private _enabled = true
-  get enabled() {
-    return this._enabled
-  }
-
-  set enabled(value) {
-    this._enabled = value
-    if (this.points) {
-      this.points.visible = value
-    }
-  }
-
-  constructor(
-    private readonly worldRenderer: WorldRendererThree
-  ) {
-    const clock = new THREE.Clock()
-    const speed = 0.2
-    this.worldRenderer.onRender.push(() => {
-      if (!this.points) return
-      this.points.position.copy(this.worldRenderer.getCameraPosition());
-      (this.points.material as StarfieldMaterial).uniforms.time.value = clock.getElapsedTime() * speed
-    })
-  }
-
-  addToScene() {
-    if (this.points || !this.enabled) return
-
-    const radius = 80
-    const depth = 50
-    const count = 7000
-    const factor = 7
-    const saturation = 10
-
-    const geometry = new THREE.BufferGeometry()
-
-    const genStar = r => new THREE.Vector3().setFromSpherical(new THREE.Spherical(r, Math.acos(1 - Math.random() * 2), Math.random() * 2 * Math.PI))
-
-    const positions = [] as number[]
-    const colors = [] as number[]
-    const sizes = Array.from({ length: count }, () => (0.5 + 0.5 * Math.random()) * factor)
-    const color = new THREE.Color()
-    let r = radius + depth
-    const increment = depth / count
-    for (let i = 0; i < count; i++) {
-      r -= increment * Math.random()
-      positions.push(...genStar(r).toArray())
-      color.setHSL(i / count, saturation, 0.9)
-      colors.push(color.r, color.g, color.b)
-    }
-
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
-    geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1))
-
-    // Create a material
-    const material = new StarfieldMaterial()
-    material.blending = THREE.AdditiveBlending
-    material.depthTest = false
-    material.transparent = true
-
-    // Create points and add them to the scene
-    this.points = new THREE.Points(geometry, material)
-    this.worldRenderer.scene.add(this.points)
-
-    this.points.renderOrder = -1
-  }
-
-  remove() {
-    if (this.points) {
-      this.points.geometry.dispose();
-      (this.points.material as THREE.Material).dispose()
-      this.worldRenderer.scene.remove(this.points)
-
-      this.points = undefined
-    }
-  }
-}
-
-const version = parseInt(THREE.REVISION.replaceAll(/\D+/g, ''), 10)
-class StarfieldMaterial extends THREE.ShaderMaterial {
-  constructor() {
-    super({
-      uniforms: { time: { value: 0 }, fade: { value: 1 } },
-      vertexShader: /* glsl */ `
-                uniform float time;
-                attribute float size;
-                varying vec3 vColor;
-                attribute vec3 color;
-                void main() {
-                vColor = color;
-                vec4 mvPosition = modelViewMatrix * vec4(position, 0.5);
-                gl_PointSize = 0.7 * size * (30.0 / -mvPosition.z) * (3.0 + sin(time + 100.0));
-                gl_Position = projectionMatrix * mvPosition;
-            }`,
-      fragmentShader: /* glsl */ `
-                uniform sampler2D pointTexture;
-                uniform float fade;
-                varying vec3 vColor;
-                void main() {
-                float opacity = 1.0;
-                gl_FragColor = vec4(vColor, 1.0);
-
-                #include <tonemapping_fragment>
-                #include <${version >= 154 ? 'colorspace_fragment' : 'encodings_fragment'}>
-            }`,
-    })
+    return this.worldBlockGeometry.getEstimatedMemoryUsage()
   }
 }
