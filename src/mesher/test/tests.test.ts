@@ -1,9 +1,9 @@
 import { test, expect } from 'vitest'
-import supportedVersions from '../../../../../src/supportedVersions.mjs'
+import { versions } from 'minecraft-data'
 import { INVISIBLE_BLOCKS } from '../worldConstants'
 import { setup } from './mesherTester'
 
-const lastVersion = supportedVersions.at(-1)
+const lastVersion = versions.pc.map(x => x.minecraftVersion).filter(version => !version.includes('w'))[0]
 
 const addPositions = [
   // [[0, 0, 0], 'diamond_block'],

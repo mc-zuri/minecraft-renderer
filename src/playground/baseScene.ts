@@ -270,13 +270,7 @@ export class BasePlaygroundScene {
     this.appViewer.resourcesManager.currentConfig = { version: this.version, noInventoryGui: true }
     await this.appViewer.resourcesManager.loadSourceData?.(this.version)
     await this.appViewer.resourcesManager.updateAssetsData?.({})
-
-    // Sync mcData from resourcesManager (should be the same, but ensure consistency)
-    if (this.appViewer.resourcesManager.currentResources?.mcData) {
-      this.mcData = this.appViewer.resourcesManager.currentResources.mcData
-      //@ts-ignore
-      window.loadedData = window.mcData = this.mcData
-    }
+    console.log('data loaded')
 
     // Load backend if not already loaded
     if (!this.appViewer.backend) {

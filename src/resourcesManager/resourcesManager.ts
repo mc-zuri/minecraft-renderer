@@ -160,7 +160,8 @@ export class ResourcesManager extends (EventEmitter as new () => TypedEmitter<Re
     return this._promiseAssetsReadyResolvers.promise
   }
 
-  async loadSourceData(version: string) {
+  async loadSourceData(version = this.currentConfig?.version) {
+    if (!version) throw new Error('No version loaded')
     // TODO
     this.sourceBlockStatesModels ??= (await import('mc-assets/dist/blockStatesModels.json')).default
   }

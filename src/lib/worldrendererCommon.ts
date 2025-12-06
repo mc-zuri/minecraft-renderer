@@ -591,16 +591,7 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
 
   sendMesherMcData() {
     const allMcData = this.resourcesManager.currentResources.mcData
-    const mcData = {
-      version: JSON.parse(JSON.stringify(allMcData.version))
-    }
-    for (const key of dynamicMcDataFiles) {
-      mcData[key] = allMcData[key]
-    }
-
-    for (const worker of this.workers) {
-      worker.postMessage({ type: 'mcData', mcData, config: this.getMesherConfig() })
-    }
+    meshersSendMcData(this.workers, this.version, dynamicMcDataFiles, allMcData)
     this.logWorkerWork('# mcData sent')
   }
 
@@ -1074,12 +1065,12 @@ export const initMesherWorker = (onGotMessage: (data: any) => void) => {
   return worker
 }
 
-export const meshersSendMcData = (workers: Worker[], version: string, mcDataKeys: string[] = dynamicMcDataFiles, mcDataFull: IndexedData) => {
+export const meshersSendMcData = (workers: Worker[], version: string, mcDataKeys = dynamicMcDataFiles, mcDataFull: IndexedData) => {
   const mcData = {
     version: JSON.parse(JSON.stringify(mcDataFull.version))
   }
-  for (const key of mcDataKeys) {
-    mcData[key] = mcDataFull[key]
+  for (const [finalKey, sourceKey] of Object.entries(mcDataKeys)) {
+    mcData[finalKey] = mcDataFull[sourceKey]
   }
 
   for (const worker of workers) {

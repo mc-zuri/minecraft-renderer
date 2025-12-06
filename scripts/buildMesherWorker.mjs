@@ -52,7 +52,7 @@ const buildOptions = {
             if (args.path.includes('bedrock')) {
               return { path: args.path, namespace: 'empty-file' }
             }
-            if (dynamicMcDataFiles.includes(fileName)) {
+            if (Object.keys(dynamicMcDataFiles).includes(fileName)) {
               return {
                 path: args.path,
                 namespace: 'mc-data',

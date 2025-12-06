@@ -1,1 +1,5 @@
-export const dynamicMcDataFiles = ['blocks', 'blockCollisionShapes', 'biomes']
+export const dynamicMcDataFiles = {
+    'blocks': 'blocksArray',
+    'blockCollisionShapes': 'blockCollisionShapes',
+    'biomes': 'biomesArray'
+}
