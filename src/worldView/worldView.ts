@@ -87,13 +87,13 @@ export class WorldView extends (EventEmitter as new () => TypedEmitter<WorldView
   gotPanicLastTime = false
   panicChunksReload = () => { }
   loadedChunks: Record<ChunkPosKey, boolean> = {}
-  private inLoading = false
-  private chunkReceiveTimes: number[] = []
-  private lastChunkReceiveTime = 0
+  inLoading = false
+  chunkReceiveTimes: number[] = []
+  lastChunkReceiveTime = 0
   public lastChunkReceiveTimeAvg = 0
-  private panicTimeout?: ReturnType<typeof setTimeout>
+  panicTimeout?: ReturnType<typeof setTimeout>
   readonly lastPos: Vec3
-  private eventListeners: Record<string, any> = {}
+  eventListeners: Record<string, any> = {}
   debugChunksInfo: Record<ChunkPosKey, {
     loads: Array<{
       dataLength: number
@@ -186,7 +186,7 @@ export class WorldView extends (EventEmitter as new () => TypedEmitter<WorldView
     await this._loadChunks(positions, pos)
   }
 
-  private chunkProgress(): void {
+  chunkProgress(): void {
     if (this.panicTimeout) clearTimeout(this.panicTimeout)
     if (this.chunkReceiveTimes.length >= 5) {
       const avgReceiveTime = this.chunkReceiveTimes.reduce((a, b) => a + b, 0) / this.chunkReceiveTimes.length
@@ -205,7 +205,7 @@ export class WorldView extends (EventEmitter as new () => TypedEmitter<WorldView
     }
   }
 
-  private async _loadChunks(positions: Vec3[], centerPos: Vec3): Promise<void> {
+  async _loadChunks(positions: Vec3[], centerPos: Vec3): Promise<void> {
     this.spiralNumber++
     const { spiralNumber } = this
 
@@ -324,9 +324,9 @@ export class WorldView extends (EventEmitter as new () => TypedEmitter<WorldView
     }))
   }
 
-  private lastBiomeId: number | null = null
+  lastBiomeId: number | null = null
 
-  private updateBiome(pos: Vec3): void {
+  updateBiome(pos: Vec3): void {
     try {
       if (!this.world.getBiome) return
       const biomeId = this.world.getBiome(pos)
@@ -341,7 +341,7 @@ export class WorldView extends (EventEmitter as new () => TypedEmitter<WorldView
     }
   }
 
-  private lastPosCheck: Vec3 | null = null
+  lastPosCheck: Vec3 | null = null
 
   /**
    * Update position and load/unload chunks as needed.
