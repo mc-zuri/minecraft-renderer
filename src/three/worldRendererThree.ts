@@ -175,16 +175,19 @@ export class WorldRendererThree extends WorldRendererCommon {
     }
 
     const controller = new manifest.controller(this)
+
+    let enabled = manifest.enabledDefault ?? false
+
     const registered: RegisteredModule = {
       manifest,
       controller,
-      enabled: manifest.enabledDefault ?? false,
+      enabled,
     }
 
     this.modules.set(manifest.id, registered)
 
-    // Auto-enable if default is true
-    if (manifest.enabledDefault) {
+    // Auto-enable if enabled is true
+    if (enabled) {
       this.enableModule(manifest.id)
     }
   }

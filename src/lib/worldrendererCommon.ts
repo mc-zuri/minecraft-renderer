@@ -48,6 +48,7 @@ export const defaultWorldRendererConfig = {
   smoothLighting: true,
   enableLighting: true,
   starfield: true,
+  futuristicReveal: false,
   defaultSkybox: true,
   renderEntities: true,
   extraBlockRenderers: true,

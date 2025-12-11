@@ -1,7 +1,7 @@
 import * as THREE from 'three'
-
-type MesherGeometryOutput = any
-type WorldRendererThree = any
+import type { WorldRendererThree } from '../worldRendererThree'
+import type { RendererModuleController, RendererModuleManifest } from '../rendererModuleSystem'
+import type { MesherGeometryOutput } from '../../mesher/shared'
 
 const SCI_FI_CYAN = new THREE.Color(13 / 255, 234 / 255, 238 / 255)
 const CHUNKS_THRESHOLD = 9
@@ -22,17 +22,17 @@ interface RevealingSection {
  * When chunks load, they first appear as glowing cyan wireframes that pulse
  * and emanate from the camera, then gradually transition to solid geometry.
  */
-export class SciFiWorldReveal {
+export class SciFiWorldRevealModule implements RendererModuleController {
   private readonly pendingGeometries = new Map<string, MesherGeometryOutput>()
   private readonly revealingSections = new Map<string, RevealingSection>()
   private finishedChunkCount = 0
   private revealTriggered = false
   private revealStartTime = 0
-  private readonly worldRenderer: WorldRendererThree
+  private enabled = false
 
   // Wireframe materials
-  private readonly wireframeMaterial: THREE.LineBasicMaterial
-  private readonly wireframeGlowMaterial: THREE.LineBasicMaterial
+  private readonly wireframeMaterial!: THREE.LineBasicMaterial
+  private readonly wireframeGlowMaterial!: THREE.LineBasicMaterial
 
   // For pulsing animation
   private pulseTime = 0
@@ -43,11 +43,14 @@ export class SciFiWorldReveal {
   // Store original methods for patching
   private originalFinishChunk: ((chunkKey: string) => void) | null = null
   private originalDestroy: (() => void) | null = null
-  private originalSceneAdd: ((...object: THREE.Object3D[]) => THREE.Object3D) | null = null
-  private originalHandleWorkerMessage: ((data: { geometry, key, type }) => void) | null = null
+  private originalSceneAdd: ((...object: THREE.Object3D[]) => THREE.Scene) | null = null
+  private originalHandleWorkerMessage: ((data: { geometry: MesherGeometryOutput; key: string; type: string }) => void) | null = null
 
-  constructor (worldRenderer: WorldRendererThree) {
-    this.worldRenderer = worldRenderer
+  constructor(private readonly worldRenderer: WorldRendererThree) {
+    // dont watch by design
+    if (!this.worldRenderer.worldRendererConfig.futuristicReveal) {
+      return
+    }
 
     // Create glowing wireframe material
     this.wireframeMaterial = new THREE.LineBasicMaterial({
@@ -64,24 +67,37 @@ export class SciFiWorldReveal {
       opacity: 0.4,
       linewidth: 1,
     })
+  }
 
-    // Hook into world renderer
+  enable(): void {
+    if (this.enabled) return
+    this.enabled = true
     this.patchWorldRenderer()
+  }
 
-    // Expose for debugging
-    ;(globalThis as any).sciFiReveal = this
+  disable(): void {
+    if (!this.enabled) return
+    this.enabled = false
+    this.unpatchWorldRenderer()
+    this.reset()
+  }
+
+  render?: () => void = () => {
+    if (!this.enabled) return
+    this.update(16)
+  }
+
+  dispose(): void {
+    this.disable()
+    this.wireframeMaterial.dispose()
+    this.wireframeGlowMaterial.dispose()
   }
 
   /**
    * Patch world renderer methods to integrate the reveal effect
    */
-  private patchWorldRenderer () {
+  private patchWorldRenderer(): void {
     const wr = this.worldRenderer
-
-    // Hook into onRender
-    wr.onRender.push(() => {
-      this.update(16)
-    })
 
     // Hook into onWorldSwitched
     wr.onWorldSwitched.push(() => {
@@ -104,7 +120,7 @@ export class SciFiWorldReveal {
 
     // Patch handleWorkerMessage
     this.originalHandleWorkerMessage = wr.handleWorkerMessage.bind(wr)
-    wr.handleWorkerMessage = (data: { geometry, key, type }) => {
+    wr.handleWorkerMessage = (data: { geometry: MesherGeometryOutput; key: string; type: string }) => {
       if (data.type === 'geometry') {
         const useRevealEffect = this.shouldUseRevealEffect(data.key)
         if (useRevealEffect) {
@@ -116,7 +132,7 @@ export class SciFiWorldReveal {
 
     // Patch scene.add to intercept mesh additions
     this.originalSceneAdd = wr.scene.add.bind(wr.scene)
-    wr.scene.add = (...objects: THREE.Object3D[]) => {
+    wr.scene.add = (...objects: THREE.Object3D[]): THREE.Scene => {
       // Call original add first
       const result = this.originalSceneAdd!(...objects)
 
@@ -130,15 +146,42 @@ export class SciFiWorldReveal {
   }
 
   /**
+   * Unpatch world renderer methods
+   */
+  private unpatchWorldRenderer(): void {
+    const wr = this.worldRenderer
+
+    if (this.originalFinishChunk) {
+      wr.finishChunk = this.originalFinishChunk
+      this.originalFinishChunk = null
+    }
+
+    if (this.originalDestroy) {
+      wr.destroy = this.originalDestroy
+      this.originalDestroy = null
+    }
+
+    if (this.originalHandleWorkerMessage) {
+      wr.handleWorkerMessage = this.originalHandleWorkerMessage
+      this.originalHandleWorkerMessage = null
+    }
+
+    if (this.originalSceneAdd) {
+      wr.scene.add = this.originalSceneAdd
+      this.originalSceneAdd = null
+    }
+  }
+
+  /**
    * Check if an object or its children is a mesh that needs reveal effect visibility patch
    */
-  private checkAndPatchMesh (obj: THREE.Object3D) {
+  private checkAndPatchMesh(obj: THREE.Object3D): void {
     // Check if this is a mesh with name === 'mesh'
     if (obj instanceof THREE.Mesh && obj.name === 'mesh') {
       const sectionKey = this.findSectionKeyForMesh(obj)
       if (sectionKey && this.shouldUseRevealEffect(sectionKey)) {
         obj.visible = false
-        ;(obj as any).hiddenByReveal = true
+          ; (obj as any).hiddenByReveal = true
       }
     }
 
@@ -152,12 +195,12 @@ export class SciFiWorldReveal {
    * Find the section key for a mesh by traversing up to find the parent group
    * and checking for sectionKey property
    */
-  private findSectionKeyForMesh (mesh: THREE.Mesh): string | null {
+  private findSectionKeyForMesh(mesh: THREE.Mesh): string | null {
     // Traverse up to find the parent group with sectionKey
     let current: THREE.Object3D | null = mesh
     while (current) {
       const { sectionKey } = (current as any)
-      if (sectionKey && this.worldRenderer.sectionObjects[sectionKey] === current) {
+      if (sectionKey && this.worldRenderer.worldBlockGeometry.sectionObjects[sectionKey] === current) {
         return sectionKey
       }
       current = current.parent
@@ -173,7 +216,7 @@ export class SciFiWorldReveal {
     const derivedKey = `${sectionX},${sectionY},${sectionZ}`
 
     // Verify this key exists in sectionObjects
-    if (this.worldRenderer.sectionObjects[derivedKey]) {
+    if (this.worldRenderer.worldBlockGeometry.sectionObjects[derivedKey]) {
       return derivedKey
     }
 
@@ -183,22 +226,22 @@ export class SciFiWorldReveal {
   /**
    * Get the scene from world renderer
    */
-  private get scene (): THREE.Scene {
+  private get scene(): THREE.Scene {
     return this.worldRenderer.scene
   }
 
   /**
    * Get camera position from world renderer
    */
-  private getCameraPosition (): THREE.Vector3 {
+  private getCameraPosition(): THREE.Vector3 {
     return this.worldRenderer.getCameraPosition()
   }
 
   /**
    * Get original mesh for a section key
    */
-  private getOriginalMesh (key: string): THREE.Mesh | null {
-    const sectionObject = this.worldRenderer.sectionObjects[key]
+  private getOriginalMesh(key: string): THREE.Mesh | null {
+    const sectionObject = this.worldRenderer.worldBlockGeometry.sectionObjects[key]
     if (!sectionObject) return null
     return sectionObject.children.find(child => child.name === 'mesh') as THREE.Mesh | null
   }
@@ -206,7 +249,7 @@ export class SciFiWorldReveal {
   /**
    * Call this when a chunk finishes loading
    */
-  onChunkFinished (_chunkKey: string) {
+  onChunkFinished(_chunkKey: string): void {
     this.finishedChunkCount++
 
     if (!this.revealTriggered && this.finishedChunkCount >= CHUNKS_THRESHOLD) {
@@ -217,7 +260,7 @@ export class SciFiWorldReveal {
   /**
    * Register a new section geometry for the reveal effect
    */
-  registerSection (key: string, geometry: MesherGeometryOutput) {
+  registerSection(key: string, geometry: MesherGeometryOutput): void {
     // If already revealed or currently revealing, skip
     if (this.revealedChunks.has(key) || this.revealingSections.has(key)) return
 
@@ -233,7 +276,8 @@ export class SciFiWorldReveal {
   /**
    * Check if a section should use the reveal effect
    */
-  shouldUseRevealEffect (key: string): boolean {
+  shouldUseRevealEffect(key: string): boolean {
+    if (!this.enabled) return false
     // Only use effect if we haven't revealed this section yet
     // and the reveal hasn't been triggered yet OR it's actively revealing
     return !this.revealedChunks.has(key) && (
@@ -246,7 +290,7 @@ export class SciFiWorldReveal {
   /**
    * Trigger the reveal sequence
    */
-  private triggerReveal () {
+  private triggerReveal(): void {
     this.revealTriggered = true
     this.revealStartTime = performance.now()
 
@@ -285,7 +329,7 @@ export class SciFiWorldReveal {
   /**
    * Start the reveal effect for a single section
    */
-  private startSectionReveal (key: string, geometry: MesherGeometryOutput) {
+  private startSectionReveal(key: string, geometry: MesherGeometryOutput): void {
     if (!geometry.positions?.length) return
 
     // Don't create if already exists
@@ -311,8 +355,8 @@ export class SciFiWorldReveal {
     group.add(wireframe)
     group.add(glowWireframe)
     group.name = 'scifi-reveal-group'
-    // Store key on group for debugging
-    ;(group as any).sectionKey = key
+      // Store key on group for debugging
+      ; (group as any).sectionKey = key
 
     this.scene.add(group)
 
@@ -330,7 +374,7 @@ export class SciFiWorldReveal {
   /**
    * Create wireframe geometry from mesh geometry
    */
-  private createWireframeGeometry (geometry: MesherGeometryOutput): THREE.BufferGeometry {
+  private createWireframeGeometry(geometry: MesherGeometryOutput): THREE.BufferGeometry {
     const positions = geometry.positions as Float32Array
     const indices = geometry.indices as Uint32Array | Uint16Array
 
@@ -357,13 +401,13 @@ export class SciFiWorldReveal {
   /**
    * Add edge to line positions if not duplicate
    */
-  private addEdge (
+  private addEdge(
     positions: Float32Array,
     i0: number,
     i1: number,
     linePositions: number[],
     edgeSet: Set<string>
-  ) {
+  ): void {
     const minI = Math.min(i0, i1)
     const maxI = Math.max(i0, i1)
     const key = `${minI}-${maxI}`
@@ -372,15 +416,16 @@ export class SciFiWorldReveal {
     edgeSet.add(key)
 
     linePositions.push(
-      positions[i0 * 3]!, positions[i0 * 3 + 1]!, positions[i0 * 3 + 2]!, positions[i1 * 3]!, positions[i1 * 3 + 1]!, positions[i1 * 3 + 2]!
+      positions[i0 * 3]!, positions[i0 * 3 + 1]!, positions[i0 * 3 + 2]!,
+      positions[i1 * 3]!, positions[i1 * 3 + 1]!, positions[i1 * 3 + 2]!
     )
   }
 
   /**
    * Update the reveal animation - call this every frame
    */
-  update (deltaTime: number) {
-    if (this.revealingSections.size === 0) return
+  update(deltaTime: number): void {
+    if (!this.enabled || this.revealingSections.size === 0) return
 
     this.pulseTime += deltaTime * 0.001 // Convert to seconds
     const currentTime = performance.now()
@@ -430,7 +475,7 @@ export class SciFiWorldReveal {
             fadeMat.transparent = true
             fadeMat.opacity = 0
             fadeMat.needsUpdate = true
-            ;(section.originalMeshRef as any).originalMaterial = originalMat
+              ; (section.originalMeshRef as any).originalMaterial = originalMat
             section.originalMeshRef.material = fadeMat
           }
         }
@@ -478,7 +523,7 @@ export class SciFiWorldReveal {
   /**
    * Complete the reveal and clean up
    */
-  private completeReveal (section: RevealingSection) {
+  private completeReveal(section: RevealingSection): void {
     // Remove from map first to prevent re-processing
     this.revealingSections.delete(section.key)
     this.revealedChunks.add(section.key)
@@ -503,7 +548,7 @@ export class SciFiWorldReveal {
   /**
    * Dispose a wireframe group and remove from scene
    */
-  private disposeWireframeGroup (group: THREE.Group) {
+  private disposeWireframeGroup(group: THREE.Group): void {
     // Remove from scene first
     this.scene.remove(group)
 
@@ -536,7 +581,7 @@ export class SciFiWorldReveal {
   /**
    * Reset the reveal system
    */
-  reset () {
+  reset(): void {
     // Clean up all revealing sections
     for (const section of this.revealingSections.values()) {
       this.disposeWireframeGroup(section.wireframeGroup)
@@ -552,18 +597,9 @@ export class SciFiWorldReveal {
   }
 
   /**
-   * Dispose of all resources
-   */
-  dispose () {
-    this.reset()
-    this.wireframeMaterial.dispose()
-    this.wireframeGlowMaterial.dispose()
-  }
-
-  /**
    * Force complete all reveals (skip animation)
    */
-  forceCompleteAll () {
+  forceCompleteAll(): void {
     const sections = [...this.revealingSections.values()]
     for (const section of sections) {
       // Show original mesh immediately
@@ -586,7 +622,7 @@ export class SciFiWorldReveal {
   /**
    * Debug: Get all wireframe groups still in scene
    */
-  debugGetWireframeGroups (): THREE.Group[] {
+  debugGetWireframeGroups(): THREE.Group[] {
     const groups: THREE.Group[] = []
     this.scene.traverse((child) => {
       if (child.name === 'scifi-reveal-group') {
@@ -599,7 +635,7 @@ export class SciFiWorldReveal {
   /**
    * Debug: Force remove all wireframe groups from scene
    */
-  debugForceCleanup () {
+  debugForceCleanup(): void {
     const groups = this.debugGetWireframeGroups()
     console.log(`[SciFiReveal] Found ${groups.length} wireframe groups in scene`)
 
@@ -620,7 +656,7 @@ export class SciFiWorldReveal {
   /**
    * Debug: Get status of the reveal system
    */
-  debugStatus () {
+  debugStatus() {
     const wireframeGroups = this.debugGetWireframeGroups()
     const trackedKeys = new Set(this.revealingSections.keys())
     const orphanedGroups = wireframeGroups.filter(g => !trackedKeys.has((g as any).sectionKey))
@@ -646,7 +682,13 @@ export class SciFiWorldReveal {
   /**
    * Debug: Log current status to console
    */
-  debugLog () {
+  debugLog(): void {
     console.log('[SciFiReveal] Status:', this.debugStatus())
   }
+}
+
+export const sciFiWorldRevealManifest: RendererModuleManifest = {
+  id: 'futuristicReveal',
+  controller: SciFiWorldRevealModule,
+  enabledDefault: true,
 }
