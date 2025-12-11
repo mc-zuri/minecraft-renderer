@@ -117,7 +117,7 @@ export const createGraphicsBackendOffThread: GraphicsBackendLoader = async (init
   return backend
 }
 createGraphicsBackendOffThread.id = 'threejs-off-thread'
-createGraphicsBackendOffThread.name = 'three.js Multi-thread'
+createGraphicsBackendOffThread.displayName = 'three.js Multi-thread'
 createGraphicsBackendOffThread.description = [
   'Uses a dedicated thread for graphics.',
   'Slightly higher power and RAM usage.',

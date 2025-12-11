@@ -11,14 +11,14 @@ import { createGraphicsBackendBase } from './graphicsBackendBase'
 /**
  * Creates a single-thread graphics backend.
  */
-const createGraphicsBackendSingleThread = (initOptions: GraphicsInitOptions) => {
+const createGraphicsBackendSingleThread: GraphicsBackendLoader = (initOptions: GraphicsInitOptions) => {
   const { main } = createGraphicsBackendBase()
   main.init(initOptions)
   return main.backend
 }
 
 createGraphicsBackendSingleThread.id = 'threejs'
-createGraphicsBackendSingleThread.name = 'three.js Blocking'
+createGraphicsBackendSingleThread.displayName = 'three.js Blocking'
 createGraphicsBackendSingleThread.description = 'Simple, old and stable main thread graphics backend providing balanced performance.'
 
 export default createGraphicsBackendSingleThread
