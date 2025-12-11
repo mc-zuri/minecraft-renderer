@@ -18,6 +18,8 @@ const createGraphicsBackendSingleThread = (initOptions: GraphicsInitOptions) => 
 }
 
 createGraphicsBackendSingleThread.id = 'threejs'
+createGraphicsBackendSingleThread.name = 'three.js Blocking'
+createGraphicsBackendSingleThread.description = 'Simple, old and stable main thread graphics backend providing balanced performance.'
 
 export default createGraphicsBackendSingleThread
 export { createGraphicsBackendSingleThread }

@@ -117,6 +117,13 @@ export const createGraphicsBackendOffThread: GraphicsBackendLoader = async (init
   return backend
 }
 createGraphicsBackendOffThread.id = 'threejs-off-thread'
+createGraphicsBackendOffThread.name = 'three.js Multi-thread'
+createGraphicsBackendOffThread.description = [
+  'Uses a dedicated thread for graphics.',
+  'Slightly higher power and RAM usage.',
+  'More stable FPS (mid-range devices), but possible lag if TPS is low.',
+  'On low-end devices it might result in device throttling and stuttering.'
+].join(' ')
 
 export const isOffthreadRendererSupported = () => {
   // check if toOffscreenCanvas is supported

@@ -13,7 +13,7 @@
     ],
     "scripts": {
         "build": "pnpm unit-test && pnpm build:publish",
-        "build:publish": "run-s build:lib build:mesher",
+        "build:publish": "run-s build:lib build:mesher buid:threeworker",
         "build:lib": "node scripts/buildLib.mjs",
         "build:lib:minify": "node scripts/buildLib.mjs --minify",
         "watch:lib": "node scripts/buildLib.mjs -w",

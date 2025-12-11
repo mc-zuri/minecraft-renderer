@@ -124,6 +124,8 @@ export interface GraphicsBackend {
 /** Graphics backend loader function type */
 export type GraphicsBackendLoader = ((options: GraphicsInitOptions) => MaybePromise<GraphicsBackend>) & {
   id: string
+  name?: string
+  description?: string
 }
 
 // ============================================================================

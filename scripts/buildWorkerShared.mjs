@@ -112,9 +112,10 @@ export function createMcDataPlugin(bundleMcData, rootDir) {
  * @param {object} options
  * @param {string} options.entryPoint - Entry point file path
  * @param {string[]} options.bundleMcData - Array of mc-data file names to bundle
+ * @param {import('esbuild').BuildOptions} options.esbuildOptions - Custom esbuild options
  * @param {boolean} options.watch - Whether in watch mode
  */
-export function createWorkerBuildOptions({ entryPoint, bundleMcData, watch }) {
+export function createWorkerBuildOptions({ entryPoint, bundleMcData, watch, esbuildOptions }) {
   const BUNDLE_MC_DATA = bundleMcData || [...Object.keys(dynamicMcDataFiles), 'version']
 
   /** @type {import('esbuild').BuildOptions} */
@@ -141,9 +142,11 @@ export function createWorkerBuildOptions({ entryPoint, bundleMcData, watch }) {
       '.png': 'dataurl',
       '.obj': 'text'
     },
+    ...esbuildOptions,
     plugins: [
       createMcDataPlugin(BUNDLE_MC_DATA, rootDir),
       polyfillNode(),
+      ...esbuildOptions.plugins,
     ],
   }
   return buildOptions

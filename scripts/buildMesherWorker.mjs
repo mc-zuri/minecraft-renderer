@@ -16,7 +16,8 @@ const mesherMcData = [...Object.keys(dynamicMcDataFiles), 'version']
 const buildOptions = createWorkerBuildOptions({
   entryPoint: path.join(rootDir, './src/mesher/mesher.ts'),
   bundleMcData: mesherMcData,
-  watch
+  watch,
+  esbuildOptions: {}
 })
 
 if (watch) {
