@@ -234,6 +234,48 @@ export class Entities {
   itemFrameMaps = {} as Record<number, Array<THREE.Mesh<THREE.PlaneGeometry, THREE.MeshLambertMaterial>>>
   pendingModelOverrides = new Map<string, { modelPath: string, modelType: Entity.EntityModelType, metadata: any }>()
 
+  private motionCache = new Map<string, { pos: THREE.Vector3, speed: number }>()
+  private readonly MOVE_ON = 0.05
+  private readonly MOVE_OFF = 0.02
+  private readonly RUN_ON = 4.8
+  private readonly RUN_OFF = 4.2
+
+  private updateAutoWalkFlags(entityKey: string, entity: SceneEntity, dt: number) {
+    if (!entity.playerObject?.animation) return
+    const anim: any = entity.playerObject.animation
+    if (!('isMoving' in anim) || !('isRunning' in anim)) return
+    if (dt <= 0) return
+
+    const cached = this.motionCache.get(entityKey)
+    if (!cached) {
+      this.motionCache.set(entityKey, { pos: entity.position.clone(), speed: 0 })
+      anim.isMoving = false
+      anim.isRunning = false
+      return
+    }
+
+    const dx = entity.position.x - cached.pos.x
+    const dz = entity.position.z - cached.pos.z
+    cached.pos.copy(entity.position)
+
+    const instSpeed = Math.hypot(dx, dz) / Math.max(dt, 1e-6)
+
+    // smooth speed (kills 1-frame spikes)
+    cached.speed = cached.speed * 0.8 + instSpeed * 0.2
+
+    const movingNow = anim.isMoving
+      ? cached.speed > this.MOVE_OFF
+      : cached.speed > this.MOVE_ON
+
+    const runningNow = anim.isRunning
+      ? cached.speed > this.RUN_OFF
+      : cached.speed > this.RUN_ON
+
+    anim.isMoving = movingNow
+    anim.isRunning = movingNow && runningNow
+  }
+
+
   get entitiesByName(): Record<string, SceneEntity[]> {
     const byName: Record<string, SceneEntity[]> = {}
     for (const entity of Object.values(this.entities)) {
@@ -303,6 +345,8 @@ export class Entities {
     this.entities = {}
     this.currentSkinUrls = {}
 
+    this.motionCache.clear()
+
     // Clean up player entity
     if (this.playerEntity) {
       this.worldRenderer.scene.remove(this.playerEntity)
@@ -365,50 +409,24 @@ export class Entities {
       this.setRendering(renderEntitiesConfig)
     }
 
-    const dt = this.clock.getDelta()
+    const dtRaw = this.clock.getDelta()
+    const dt = Math.min(dtRaw, 1 / 30)
     const botPos = this.worldRenderer.viewerChunkPosition
     const VISIBLE_DISTANCE = 10 * 10
 
     // Update regular entities
-    for (const [entityId, entity] of [...Object.entries(this.entities), ['player_entity', this.playerEntity] as [string, SceneEntity | null]]) {
+    for (const [entityIdRaw, entity] of [...Object.entries(this.entities), ['player_entity', this.playerEntity] as [string, SceneEntity | null]]) {
       if (!entity) continue
-      const { playerObject } = entity
 
-      // Update animations
-      if (playerObject?.animation) {
-        playerObject.animation.update(playerObject, dt)
-      }
+      let entityKey = entityIdRaw
+      const isPlayerEntity = entityIdRaw === 'player_entity'
 
-      // Update GLTF animations
-      entity.traverse(child => {
-        if (child instanceof Entity.EntityMesh) {
-          child.update(dt)
-        }
-      })
+      // Sync third-person player entity BEFORE animation (so motion detection/animation uses the correct position)
+      if (isPlayerEntity) {
+        const thirdPerson = this.worldRenderer.playerStateUtils.isThirdPerson()
+        entity.visible = thirdPerson
 
-      // Update visibility based on distance and chunk load status
-      if (botPos && entity.position) {
-        const dx = entity.position.x - botPos.x
-        const dy = entity.position.y - botPos.y
-        const dz = entity.position.z - botPos.z
-        const distanceSquared = dx * dx + dy * dy + dz * dz
-
-        // Entity is visible if within 20 blocks OR in a finished chunk
-        entity.visible = !!(distanceSquared < VISIBLE_DISTANCE || this.worldRenderer.shouldObjectVisible(entity))
-
-        this.maybeRenderPlayerSkin(entityId)
-      }
-
-      if (entity.visible) {
-        // Update armor positions
-        this.syncArmorPositions(entity)
-      }
-
-      if (entityId === 'player_entity') {
-        entity.visible = this.worldRenderer.playerStateUtils.isThirdPerson()
-
-        if (entity.visible) {
-          // sync
+        if (thirdPerson) {
           const yOffset = this.worldRenderer.playerStateReactive.eyeHeight
           const pos = this.worldRenderer.cameraObject.position.clone().add(new THREE.Vector3(0, -yOffset, 0))
           entity.position.set(pos.x, pos.y, pos.z)
@@ -423,6 +441,43 @@ export class Entities {
             }
           })
         }
+
+        entityKey = String(this.playerEntity?.originalEntity.id ?? 'player_entity')
+      }
+
+      const { playerObject } = entity
+
+      // Motion-driven walk/run flags (must happen before animation.update)
+      this.updateAutoWalkFlags(entityKey, entity, dtRaw)
+
+      // Update PlayerObject animations
+      if (playerObject?.animation) {
+        playerObject.animation.update(playerObject, dt)
+      }
+
+      // Update GLTF animations
+      entity.traverse(child => {
+        if (child instanceof Entity.EntityMesh) {
+          child.update(dt)
+        }
+      })
+
+      // Update visibility based on distance and chunk load status
+      if (!isPlayerEntity && botPos && entity.position) {
+        const dx = entity.position.x - botPos.x
+        const dy = entity.position.y - botPos.y
+        const dz = entity.position.z - botPos.z
+        const distanceSquared = dx * dx + dy * dy + dz * dz
+
+        // Entity is visible if within 20 blocks OR in a finished chunk
+        entity.visible = !!(distanceSquared < VISIBLE_DISTANCE || this.worldRenderer.shouldObjectVisible(entity))
+
+        this.maybeRenderPlayerSkin(entityIdRaw)
+      }
+
+      if (entity.visible) {
+        // Update armor positions
+        this.syncArmorPositions(entity)
       }
     }
   }
@@ -692,6 +747,10 @@ export class Entities {
   playAnimation(entityPlayerId, animation: 'walking' | 'running' | 'oneSwing' | 'idle' | 'crouch' | 'crouchWalking') {
     // TODO CLEANUP!
     // Handle special player entity ID for bot entity in third person
+    const key = String(entityPlayerId)
+    if (this.playerPerAnimation[key] === animation) return
+    this.playerPerAnimation[key] = animation
+
     if (entityPlayerId === 'player_entity' && this.playerEntity?.playerObject) {
       const { playerObject } = this.playerEntity
       if (animation === 'oneSwing') {
@@ -911,26 +970,6 @@ export class Entities {
               }
             }
 
-            // TNT blinking
-            // if (entity.name === 'tnt') {
-            //   let lastBlink = 0
-            //   const blinkInterval = 500 // ms between blinks
-            //   mesh.onBeforeRender = () => {
-            //     const now = Date.now()
-            //     if (now - lastBlink > blinkInterval) {
-            //       lastBlink = now
-            //       mesh.traverse((child) => {
-            //         if (child instanceof THREE.Mesh) {
-            //           const material = child.material as THREE.MeshLambertMaterial
-            //           material.color.set(material.color?.equals(new THREE.Color(0xff_ff_ff))
-            //             ? new THREE.Color(0xff_00_00)
-            //             : new THREE.Color(0xff_ff_ff))
-            //         }
-            //       })
-            //     }
-            //   }
-            // }
-
             group.additionalCleanup = () => {
               // important: avoid texture memory leak and gpu slowdown
               if (object.cleanup) {
@@ -1146,7 +1185,6 @@ export class Entities {
           })
           if (itemMesh) {
             itemMesh.mesh.position.set(0, 0, -0.05)
-            // itemMesh.mesh.position.set(0, 0, 0.43)
             if (itemMesh.isBlock) {
               itemMesh.mesh.scale.set(0.25, 0.25, 0.25)
             } else {
@@ -1229,6 +1267,7 @@ export class Entities {
   onRemoveEntity(entity: import('prismarine-entity').Entity) {
     this.loadedSkinEntityIds.delete(entity.id.toString())
     delete this.currentSkinUrls[entity.id.toString()]
+    this.motionCache.delete(entity.id.toString())
   }
 
   updateMap(mapNumber: string | number, data: string) {
@@ -1534,12 +1573,6 @@ function addArmorModel(worldRenderer: WorldRendererThree, entityMesh: THREE.Obje
     })
   } else {
     mesh = getMesh(worldRenderer, texturePath, armorModel[slotType])
-    // // enable debug mode to see the mesh
-    // mesh.traverse(c => {
-    //   if (c instanceof THREE.Mesh) {
-    //     c.material.wireframe = true
-    //   }
-    // })
     if (slotType === 'head') {
       // avoid z-fighting with the head
       mesh.children[0].position.y += 0.01
