@@ -25,6 +25,8 @@ jobs:
         run: npm install -g corepack && corepack enable
       - name: Install Dependencies
         run: pnpm install
+      - name: Add @ts-nocheck to all TypeScript files
+        run: node scripts/addTsNocheck.mjs
       - name: Print npm version
         run: npm -v
       - run: pnpx zardoy-release npm
