@@ -133,7 +133,6 @@ export function createWorkerBuildOptions({ entryPoint, bundleMcData, watch, esbu
     sourcemap: 'linked',
     target: watch ? undefined : ['ios14'],
     write: false,
-    metafile: true,
     outdir: path.join(rootDir, './dist'),
     define: {
       'process.env.BROWSER': '"true"',

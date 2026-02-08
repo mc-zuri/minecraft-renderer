@@ -45,18 +45,18 @@ export const defaultWorldRendererConfig = {
   showHand: false,
   viewBobbing: false,
   renderEars: true,
-  highlightBlockColor: 'blue',
+  highlightBlockColor: 'blue' as 'blue' | 'classic' | undefined,
 
   // Player models
   fetchPlayerSkins: true,
-  skinTexturesProxy: undefined,
+  skinTexturesProxy: undefined as undefined | string,
 
   // VR settings
   vrSupport: true,
   vrPageGameRendering: true,
 
   // World settings
-  clipWorldBelowY: undefined,
+  clipWorldBelowY: undefined as undefined | number,
   isPlayground: false,
   instantCameraUpdate: false
 }
