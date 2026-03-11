@@ -1150,4 +1150,24 @@ export class WorldRendererThree extends WorldRendererCommon {
   getEstimatedMemoryUsage(): { bytes: number; readable: string } {
     return this.worldBlockGeometry.getEstimatedMemoryUsage()
   }
+
+  toggleRain(): boolean {
+    const module = this.modules.get('rain')
+    if (!module) return false
+    if (module.enabled) {
+      this.disableModule('rain')
+      return false
+    } else {
+      this.enableModule('rain')
+      return true
+    }
+  }
+
+  setRain(enabled: boolean): void {
+    if (enabled) {
+      this.enableModule('rain')
+    } else {
+      this.disableModule('rain')
+    }
+  }
 }
