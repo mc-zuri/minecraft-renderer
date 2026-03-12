@@ -176,4 +176,5 @@ export const rainManifest: RendererModuleManifest = {
   id: 'rain',
   controller: RainModule,
   enabledDefault: false,
+  requiresHeightmap: true,
 }

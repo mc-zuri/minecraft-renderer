@@ -28,6 +28,8 @@ export interface RendererModuleManifest {
   cannotBeDisabled?: boolean
   slowSystemAutoDisable?: boolean
   userSettingsSchema?: Record<string, any>
+
+  requiresHeightmap?: boolean
 }
 
 export interface RegisteredModule {
