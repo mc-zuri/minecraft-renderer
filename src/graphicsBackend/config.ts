@@ -19,7 +19,7 @@ export const defaultWorldRendererConfig = {
   // Debug settings
   showChunkBorders: false,
   enableDebugOverlay: false,
-  debugModelVariant: undefined,
+  debugModelVariant: undefined as undefined | number[],
   futuristicReveal: false,
 
   // Performance settings

@@ -12,8 +12,8 @@ import * as THREE from 'three'
 import Stats from 'stats.js'
 import StatsGl from 'stats-gl'
 import * as tween from '@tweenjs/tween.js'
-import { WorldRendererConfig } from '../lib/worldrendererCommon'
 import type { GraphicsInitOptions } from '../graphicsBackend/types'
+import { WorldRendererConfig } from '../graphicsBackend'
 
 // ============================================================================
 // Types (co-located with implementation)
@@ -207,7 +207,7 @@ export class DocumentRenderer {
 
     try {
       this.renderer = new THREE.WebGLRenderer({
-        canvas: this.canvas,
+        canvas: this.canvas as HTMLCanvasElement,
         preserveDrawingBuffer: true,
         logarithmicDepthBuffer: true,
         powerPreference: this.config.powerPreference

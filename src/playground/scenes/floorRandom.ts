@@ -26,7 +26,7 @@ export default class RailsCobwebScene extends BasePlaygroundScene {
     for (let x = -squareSize; x <= squareSize; x++) {
       for (let z = -squareSize; z <= squareSize; z++) {
         const i = Math.abs(x + z) * squareSize
-        this.worldView!.world.setBlock(this.targetPos.offset(x, 0, z), this.Block.fromStateId(fullBlocks[i % fullBlocks.length].defaultState, 0))
+        this.worldView!.setBlockStateId(this.targetPos.offset(x, 0, z), this.mcData.blocksByName[fullBlocks[i % fullBlocks.length].name]!.defaultState)
       }
     }
   }

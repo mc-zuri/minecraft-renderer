@@ -6,7 +6,6 @@ import { BlockModel } from 'mc-assets'
 import { DebugGui } from '../lib/DebugGui'
 import { SmoothSwitcher } from '../lib/smoothSwitcher'
 import { watchProperty } from '../lib/utils/proxy'
-import { WorldRendererConfig } from '../lib/worldrendererCommon'
 import { getMyHand } from './hand'
 import { WorldRendererThree } from './worldRendererThree'
 import { disposeObject } from './threeJsUtils'
@@ -15,6 +14,7 @@ import { PlayerStateRenderer } from '../playerState/playerState'
 import { getThreeBlockModelGroup } from '../mesher/standaloneRenderer'
 import { IndexedData } from 'minecraft-data'
 import type { ResourcesManagerTransferred } from '../resourcesManager'
+import { WorldRendererConfig } from '../graphicsBackend'
 
 const rotationPositionData = {
   itemRight: {
