@@ -1,0 +1,27 @@
+name: NPM Release
+on:
+  pull_request:
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Update npm
+        run: npm install -g npm@latest
+      - name: Install & Enable Corepack
+        run: npm install -g corepack && corepack enable
+      - name: Install Dependencies
+        run: pnpm install
+      - name: TypeCheck
+        run: pnpm tsc
