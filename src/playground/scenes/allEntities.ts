@@ -7,6 +7,6 @@ export default class AllEntities extends BasePlaygroundScene {
 
   async initData() {
     await super.initData()
-    displayEntitiesDebugList(this.version)
+    displayEntitiesDebugList(this.mcData)
   }
 }

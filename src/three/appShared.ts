@@ -24,8 +24,8 @@ export const getItemUv = (item: Record<string, any>, specificProps: ItemSpecific
   try {
     const name =
       blockState
-        ? loadedData.blocksByStateId[blockState]?.name
-        : typeof idOrName === 'number' ? loadedData.items[idOrName]?.name : idOrName
+        ? globalThis.loadedData.blocksByStateId[blockState]?.name
+        : typeof idOrName === 'number' ? globalThis.loadedData.items[idOrName]?.name : idOrName
     if (!name) throw new Error(`Item not found: ${idOrName}`)
 
     const model = getItemModelName({

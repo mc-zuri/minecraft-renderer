@@ -4,11 +4,11 @@
  * Core types for the graphics backend system.
  */
 
-import { WorldRendererConfig } from '../lib/worldrendererCommon'
 import { PlayerStateReactive } from '../playerState/playerState'
 import { ResourcesManagerTransferred } from '../resourcesManager'
 import { WorldViewWorker } from '../worldView'
 import { Vec3 } from 'vec3'
+import { WorldRendererConfig } from './config'
 
 // ============================================================================
 // Graphics Backend Configuration

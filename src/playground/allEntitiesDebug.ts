@@ -1,6 +1,9 @@
+import { IndexedData } from 'minecraft-data'
 import { EntityMesh, rendererSpecialHandled, EntityDebugFlags } from '../three/entity/EntityMesh'
 
-export const displayEntitiesDebugList = (version: string) => {
+export const displayEntitiesDebugList = (mcData: IndexedData) => {
+  const version = mcData.version.minecraftVersion!
+
   // Create results container
   const container = document.createElement('div')
   container.style.cssText = `
@@ -35,7 +38,6 @@ export const displayEntitiesDebugList = (version: string) => {
     textureMap?: boolean;
     errors?: string[];
   }> = []
-  const { mcData } = window
   const entityNames = Object.keys(mcData.entitiesArray.reduce((acc, entity) => {
     acc[entity.name] = true
     return acc
@@ -63,8 +65,8 @@ export const displayEntitiesDebugList = (version: string) => {
 
       const { mesh: entityMesh } = new EntityMesh(version, entity, undefined, {}, debugFlags)
       // find the most distant pos child
-      window.objects ??= {}
-      window.objects[entity] = entityMesh
+      globalThis.objects ??= {}
+      globalThis.objects[entity] = entityMesh
 
       results.push({
         entity,
