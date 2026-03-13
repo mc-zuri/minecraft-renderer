@@ -47,6 +47,10 @@ export class RainModule implements RendererModuleController {
     }
   }
 
+  autoEnableCheck(): boolean {
+    return this.worldRenderer.worldRendererConfig.isRaining === true
+  }
+
   render?: () => void = () => {
     if (!this.enabled || !this.instancedMesh) return
 

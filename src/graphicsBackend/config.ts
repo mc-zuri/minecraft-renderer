@@ -58,7 +58,11 @@ export const defaultWorldRendererConfig = {
   // World settings
   clipWorldBelowY: undefined as undefined | number,
   isPlayground: false,
-  instantCameraUpdate: false
+  instantCameraUpdate: false,
+  isRaining: false,
+
+  // Module states: 'enabled' = force on, 'disabled' = force off, 'auto' = use autoEnableCheck
+  moduleStates: {} as Record<string, 'enabled' | 'disabled' | 'auto'>
 }
 
 export type WorldRendererConfig = typeof defaultWorldRendererConfig

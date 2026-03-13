@@ -4,7 +4,7 @@ import { Vec3 } from 'vec3'
 import TypedEmitter from 'typed-emitter'
 import { WorldBlockProvider } from 'mc-assets/dist/worldBlockProvider'
 import { subscribeKey } from 'valtio/utils'
-import { proxy } from 'valtio'
+import { proxy, subscribe } from 'valtio'
 import type { ResourcesManagerTransferred } from '../resourcesManager/resourcesManager'
 import { dynamicMcDataFiles } from './buildSharedConfig.mjs'
 import { DisplayWorldOptions, GraphicsInitOptions, RendererReactiveState, SoundSystem } from '../graphicsBackend/types'
@@ -284,7 +284,11 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
 
   onReactiveConfigUpdated<T extends keyof typeof this.worldRendererConfig>(key: T, callback: (value: typeof this.worldRendererConfig[T]) => void) {
     callback(this.worldRendererConfig[key])
-    subscribeKey(this.worldRendererConfig, key, callback)
+    if ((key as any) === '*') {
+      subscribe(this.worldRendererConfig, callback as any)
+    } else {
+      subscribeKey(this.worldRendererConfig, key, callback)
+    }
   }
 
   onReactiveDebugUpdated<T extends keyof typeof this.reactiveDebugParams>(key: T, callback: (value: typeof this.reactiveDebugParams[T]) => void) {

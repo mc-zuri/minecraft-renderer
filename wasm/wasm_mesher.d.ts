@@ -7,9 +7,9 @@
  * Input: Serialized chunk data as TypedArrays
  * Output: Geometry data (positions, normals, colors, uvs, indices)
  */
-export function generate_geometry(section_x: number, section_y: number, section_z: number, section_height: number, world_min_y: number, world_max_y: number, block_states: Uint16Array, block_light: Uint8Array, sky_light: Uint8Array, biomes: Uint8Array, invisible_blocks: Uint16Array, transparent_blocks: Uint16Array, no_ao_blocks: Uint16Array, cull_identical_blocks: Uint16Array, occluding_blocks: Uint16Array, enable_lighting: boolean, smooth_lighting: boolean, sky_light_value: number): any;
+export function generate_geometry(section_x: number, section_y: number, section_z: number, section_height: number, world_min_y: number, world_max_y: number, section_data_start_y: number, block_states: Uint16Array, block_light: Uint8Array, sky_light: Uint8Array, biomes: Uint8Array, invisible_blocks: Uint16Array, transparent_blocks: Uint16Array, no_ao_blocks: Uint16Array, cull_identical_blocks: Uint16Array, occluding_blocks: Uint16Array, enable_lighting: boolean, smooth_lighting: boolean, sky_light_value: number): any;
 
-export function generate_geometry_multi(section_x: number, section_y: number, section_z: number, section_height: number, world_min_y: number, world_max_y: number, chunk_xs: Int32Array, chunk_zs: Int32Array, block_states: Uint16Array, block_light: Uint8Array, sky_light: Uint8Array, biomes: Uint8Array, invisible_blocks: Uint16Array, transparent_blocks: Uint16Array, no_ao_blocks: Uint16Array, cull_identical_blocks: Uint16Array, occluding_blocks: Uint16Array, enable_lighting: boolean, smooth_lighting: boolean, sky_light_value: number): any;
+export function generate_geometry_multi(section_x: number, section_y: number, section_z: number, section_height: number, world_min_y: number, world_max_y: number, section_data_start_y: number, chunk_xs: Int32Array, chunk_zs: Int32Array, block_states: Uint16Array, block_light: Uint8Array, sky_light: Uint8Array, biomes: Uint8Array, invisible_blocks: Uint16Array, transparent_blocks: Uint16Array, no_ao_blocks: Uint16Array, cull_identical_blocks: Uint16Array, occluding_blocks: Uint16Array, enable_lighting: boolean, smooth_lighting: boolean, sky_light_value: number): any;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 

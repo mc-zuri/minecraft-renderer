@@ -296,11 +296,8 @@ export class WorldRendererThree extends WorldRendererCommon {
    * Initialize all registered modules
    */
   private initializeModules(): void {
-    for (const [id, module] of Object.entries(this.modules)) {
-      if (module.manifest.enabledDefault) {
-        this.enableModule(id)
-      }
-    }
+    // Use updateModulesFromConfig to handle initial state correctly (respects force states and auto-enable)
+    this.updateModulesFromConfig()
   }
 
   /**
@@ -411,6 +408,61 @@ export class WorldRendererThree extends WorldRendererCommon {
     this.onReactiveConfigUpdated('defaultSkybox', (value) => {
       this.skyboxRenderer.updateDefaultSkybox(value)
     })
+
+    // Watch for config changes that affect modules
+    this.onReactiveConfigUpdated('*' as any, () => {
+      this.updateModulesFromConfig()
+    })
+
+    // Initial update
+    this.updateModulesFromConfig()
+  }
+
+  /**
+   * Update module states based on config (force states and auto-enable checks)
+   */
+  private updateModulesFromConfig(): void {
+    const { moduleStates } = this.worldRendererConfig
+
+    for (const [moduleId, module] of Object.entries(this.modules)) {
+      const forceState = moduleStates[moduleId]
+
+      // Check force states first
+      if (forceState === 'enabled') {
+        if (!module.enabled) {
+          this.toggleModule(moduleId, true)
+        }
+        continue
+      }
+
+      if (forceState === 'disabled') {
+        if (module.enabled && !module.manifest.cannotBeDisabled) {
+          this.toggleModule(moduleId, false)
+        }
+        continue
+      }
+
+      // Auto mode: use autoEnableCheck if available, otherwise use enabledDefault
+      if (forceState === 'auto' || forceState === undefined) {
+        if (module.controller.autoEnableCheck) {
+          const shouldEnable = module.controller.autoEnableCheck()
+
+          if (shouldEnable && !module.enabled) {
+            this.toggleModule(moduleId, true)
+          } else if (!shouldEnable && module.enabled && !module.manifest.cannotBeDisabled) {
+            this.toggleModule(moduleId, false)
+          }
+        } else {
+          // No autoEnableCheck: use enabledDefault
+          const shouldEnable = module.manifest.enabledDefault ?? false
+          if (shouldEnable && !module.enabled) {
+            this.toggleModule(moduleId, true)
+          } else if (!shouldEnable && module.enabled && !module.manifest.cannotBeDisabled) {
+            this.toggleModule(moduleId, false)
+          }
+        }
+      }
+    }
   }
 
   changeHandSwingingState(isAnimationPlaying: boolean, isLeft = false) {

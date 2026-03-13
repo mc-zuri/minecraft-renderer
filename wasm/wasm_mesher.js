@@ -227,6 +227,7 @@ let WASM_VECTOR_LEN = 0;
  * @param {number} section_height
  * @param {number} world_min_y
  * @param {number} world_max_y
+ * @param {number} section_data_start_y
  * @param {Uint16Array} block_states
  * @param {Uint8Array} block_light
  * @param {Uint8Array} sky_light
@@ -241,13 +242,14 @@ let WASM_VECTOR_LEN = 0;
  * @param {number} sky_light_value
  * @returns {any}
  */
-export function generate_geometry(section_x, section_y, section_z, section_height, world_min_y, world_max_y, block_states, block_light, sky_light, biomes, invisible_blocks, transparent_blocks, no_ao_blocks, cull_identical_blocks, occluding_blocks, enable_lighting, smooth_lighting, sky_light_value) {
+export function generate_geometry(section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, block_states, block_light, sky_light, biomes, invisible_blocks, transparent_blocks, no_ao_blocks, cull_identical_blocks, occluding_blocks, enable_lighting, smooth_lighting, sky_light_value) {
     _assertNum(section_x);
     _assertNum(section_y);
     _assertNum(section_z);
     _assertNum(section_height);
     _assertNum(world_min_y);
     _assertNum(world_max_y);
+    _assertNum(section_data_start_y);
     const ptr0 = passArray16ToWasm0(block_states, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passArray8ToWasm0(block_light, wasm.__wbindgen_malloc);
@@ -269,7 +271,7 @@ export function generate_geometry(section_x, section_y, section_z, section_heigh
     _assertBoolean(enable_lighting);
     _assertBoolean(smooth_lighting);
     _assertNum(sky_light_value);
-    const ret = wasm.generate_geometry(section_x, section_y, section_z, section_height, world_min_y, world_max_y, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, enable_lighting, smooth_lighting, sky_light_value);
+    const ret = wasm.generate_geometry(section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, enable_lighting, smooth_lighting, sky_light_value);
     return ret;
 }
 
@@ -296,13 +298,14 @@ export function generate_geometry(section_x, section_y, section_z, section_heigh
  * @param {number} sky_light_value
  * @returns {any}
  */
-export function generate_geometry_multi(section_x, section_y, section_z, section_height, world_min_y, world_max_y, chunk_xs, chunk_zs, block_states, block_light, sky_light, biomes, invisible_blocks, transparent_blocks, no_ao_blocks, cull_identical_blocks, occluding_blocks, enable_lighting, smooth_lighting, sky_light_value) {
+export function generate_geometry_multi(section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, chunk_xs, chunk_zs, block_states, block_light, sky_light, biomes, invisible_blocks, transparent_blocks, no_ao_blocks, cull_identical_blocks, occluding_blocks, enable_lighting, smooth_lighting, sky_light_value) {
     _assertNum(section_x);
     _assertNum(section_y);
     _assertNum(section_z);
     _assertNum(section_height);
     _assertNum(world_min_y);
     _assertNum(world_max_y);
+    _assertNum(section_data_start_y);
     const ptr0 = passArray32ToWasm0(chunk_xs, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passArray32ToWasm0(chunk_zs, wasm.__wbindgen_malloc);
@@ -328,7 +331,7 @@ export function generate_geometry_multi(section_x, section_y, section_z, section
     _assertBoolean(enable_lighting);
     _assertBoolean(smooth_lighting);
     _assertNum(sky_light_value);
-    const ret = wasm.generate_geometry_multi(section_x, section_y, section_z, section_height, world_min_y, world_max_y, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9, ptr10, len10, enable_lighting, smooth_lighting, sky_light_value);
+    const ret = wasm.generate_geometry_multi(section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9, ptr10, len10, enable_lighting, smooth_lighting, sky_light_value);
     return ret;
 }
 

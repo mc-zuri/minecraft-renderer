@@ -9,6 +9,7 @@ export interface RendererModuleController {
   dispose(): void
 
   enablementCheck?: () => boolean
+  autoEnableCheck?: () => boolean // Called when config updates, returns true to enable, false to disable
   render?: () => void
 }
 
