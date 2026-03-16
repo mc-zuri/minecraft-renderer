@@ -214,6 +214,11 @@ export const createGraphicsBackendBase = () => {
       get entitiesString() {
         return worldRenderer?.entities.getDebugString()
       },
+      get left() {
+        return {
+          'Geo Memory': worldRenderer?.worldBlockGeometry.getEstimatedMemoryUsage().readable ?? '-'
+        }
+      },
     }),
     updateCamera(pos: Vec3 | null, yaw: number, pitch: number) {
       // Mark camera update event for frame timing visualization

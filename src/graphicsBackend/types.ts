@@ -118,7 +118,7 @@ export interface GraphicsBackend {
   updateCamera(pos: Vec3 | null, yaw: number, pitch: number): void
   soundSystem?: any
   backendMethods?: any
-  getDebugOverlay?(): { entitiesString?: string, right?: string }
+  getDebugOverlay?(): { entitiesString?: string, left?: Record<string, string>, right?: Record<string, string> }
 }
 
 /** Graphics backend loader function type */
