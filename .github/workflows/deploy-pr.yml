@@ -65,10 +65,10 @@ jobs:
           path: client
 
       - name: Copy archive to client
-        run: cp minecraft-renderer-*.tgz client/
+        run: cp minecraft-renderer-*.tgz prismarine-web/
 
       - name: Replace minecraft-renderer dependency in package.json
-        working-directory: client
+        working-directory: prismarine-web
         run: |
           ARCHIVE=$(ls minecraft-renderer-*.tgz | head -1)
           ARCHIVE_SPEC="file:./$ARCHIVE"
@@ -94,32 +94,32 @@ jobs:
           grep minecraft-renderer package.json
 
       - name: Setup Corepack in client
-        working-directory: client
+        working-directory: prismarine-web
         run: |
           npm install -g npm@latest
           corepack enable
 
       - name: Install client dependencies
-        working-directory: client
+        working-directory: prismarine-web
         run: pnpm install --no-frozen-lockfile
 
       - name: Build client
-        working-directory: client
+        working-directory: prismarine-web
         run: pnpm build
 
       - name: Install Vercel CLI
         run: npm install -g vercel
 
       - name: Pull Vercel Environment Information
-        working-directory: client
+        working-directory: prismarine-web
         run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Build for Vercel
-        working-directory: client
+        working-directory: prismarine-web
         run: vercel build  --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Deploy to Vercel
-        working-directory: client
+        working-directory: prismarine-web
         id: deploy
         run: |
           url=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }} 2>&1)
