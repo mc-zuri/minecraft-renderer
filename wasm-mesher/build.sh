@@ -52,6 +52,8 @@ fi
 
 # Output dir: repo root / wasm (one level up from wasm-mesher)
 OUT_DIR="$(cd .. && pwd)/wasm"
+# Node test expects wasm in wasm-mesher/pkg (nodejs target for require())
+PKG_DIR="$(pwd)/pkg"
 
 case "$TARGET" in
   web)
@@ -60,6 +62,12 @@ case "$TARGET" in
     echo "✅ Build complete! (web target)"
     echo "📦 Output: $OUT_DIR"
     echo "   Files: wasm_mesher.js, wasm_mesher_bg.wasm, wasm_mesher.d.ts"
+    # Build nodejs to pkg for snapshot test (chunk.json vs wasm-chunk.snapshot.json)
+    echo ""
+    echo "🔨 Building for nodejs (snapshot test)..."
+    wasm-pack build --target nodejs --out-dir "$PKG_DIR" $BUILD_FLAGS
+    echo "🧪 Running WASM snapshot test (chunk.json → wasm-chunk.snapshot.json)..."
+    node build.mjs && node wasm-mesher.cjs
     ;;
   nodejs)
     echo "🔨 Building WASM mesher for nodejs target..."
@@ -91,6 +99,6 @@ case "$TARGET" in
     ;;
 esac
 
-# Remove wasm-pack extras we don't ship
+# Remove wasm-pack extras we don't ship (only from OUT_DIR; pkg is for testing)
 echo "🧹 Removing README, package.json, .gitignore from $OUT_DIR"
 rm -f "$OUT_DIR/README" "$OUT_DIR/README.md" "$OUT_DIR/package.json" "$OUT_DIR/.gitignore"

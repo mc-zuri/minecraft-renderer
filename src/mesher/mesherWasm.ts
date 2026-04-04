@@ -230,11 +230,18 @@ setInterval(async () => {
 
       try {
         // Convert chunk to WASM format (always recompute since section is dirty)
-        // If IS_FULL_WORLD_SECTION is false, only convert the specific section
         const worldMinY = config?.worldMinY || 0
         const worldMaxY = config?.worldMaxY || 256
-        const sectionY = IS_FULL_WORLD_SECTION ? undefined : y
-        const convertSectionHeight = IS_FULL_WORLD_SECTION ? undefined : sectionHeight
+
+        // Expand the data range by ±1 Y block so WASM can correctly cull faces at section
+        // boundaries (without this, the block above/below a section always appears as air).
+        // We clamp to world bounds and pass section_data_start_y to WASM so it knows the offset.
+        const sectionDataStartY = IS_FULL_WORLD_SECTION ? worldMinY : Math.max(y - 1, worldMinY)
+        const sectionDataEndY = IS_FULL_WORLD_SECTION ? worldMaxY : Math.min(y + sectionHeight + 1, worldMaxY)
+        const sectionDataHeight = sectionDataEndY - sectionDataStartY
+
+        const convertSectionY = IS_FULL_WORLD_SECTION ? undefined : sectionDataStartY
+        const convertSectionHeight = IS_FULL_WORLD_SECTION ? undefined : sectionDataHeight
 
         // Run WASM mesher for this section
         const chunksToUse = collectChunksForSection(x, y, z)
@@ -247,7 +254,7 @@ setInterval(async () => {
           cz,
           worldMinY,
           worldMaxY,
-          sectionY,
+          convertSectionY,
           convertSectionHeight
         ))
 
@@ -265,6 +272,7 @@ setInterval(async () => {
           wasmResult = wasm.generate_geometry(
             x, y, z, sectionHeight,
             worldMinY, worldMaxY,
+            sectionDataStartY,
             blockStates, blockLight, skyLight, biomesArray,
             invisibleBlocks, transparentBlocks, noAoBlocks, cullIdenticalBlocks, occludingBlocks,
             config?.enableLighting !== false,
@@ -293,6 +301,7 @@ setInterval(async () => {
           wasmResult = (wasm as any).generate_geometry_multi(
             x, y, z, sectionHeight,
             worldMinY, worldMaxY,
+            sectionDataStartY,
             xs, zs,
             blockStatesAll, blockLightAll, skyLightAll, biomesAll,
             invisibleBlocks, transparentBlocks, noAoBlocks, cullIdenticalBlocks, occludingBlocks,
@@ -300,6 +309,13 @@ setInterval(async () => {
             config?.smoothLighting !== false,
             config?.skyLight || 15
           )
+        }
+
+        // Post heightmap derived from WASM's block iteration — replaces the getHeightmap request
+        if (wasmResult.heightmap?.length === 256) {
+          const heightmapData = new Int16Array(wasmResult.heightmap)
+          const chunkKey = `${x / 16},${z / 16}`
+          postMessage({ type: 'heightmap', key: chunkKey, heightmap: heightmapData }, [heightmapData.buffer])
         }
 
 

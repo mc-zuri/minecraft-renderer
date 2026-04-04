@@ -29,6 +29,7 @@ pub fn generate_geometry(
     section_height: i32,
     world_min_y: i32,
     world_max_y: i32,
+    section_data_start_y: i32,
     block_states: &[u16],
     block_light: &[u8],
     sky_light: &[u8],
@@ -42,27 +43,28 @@ pub fn generate_geometry(
     smooth_lighting: bool,
     sky_light_value: u8,
 ) -> JsValue {
+    let chunk_data_height = (block_states.len() / (16 * 16)) as i32;
+    if chunk_data_height < section_height {
+        let err_msg = format!(
+            "block_states too small: data covers {} Y layers but section_height is {}",
+            chunk_data_height,
+            section_height
+        );
+        wasm_bindgen::throw_str(&err_msg);
+    }
+
     let mesher = Mesher::new(
         section_x,
         section_y,
         section_z,
         section_height,
+        section_data_start_y,
         world_min_y,
         world_max_y,
         enable_lighting,
         smooth_lighting,
         sky_light_value,
     );
-
-    let expected_size = (section_height * 16 * 16) as usize;
-    if block_states.len() < expected_size {
-        let err_msg = format!(
-            "block_states length < expected: expected {}, got {}",
-            expected_size,
-            block_states.len()
-        );
-        wasm_bindgen::throw_str(&err_msg);
-    }
 
     let result = mesher.generate(
         block_states,
@@ -87,6 +89,7 @@ pub fn generate_geometry_multi(
     section_height: i32,
     world_min_y: i32,
     world_max_y: i32,
+    section_data_start_y: i32,
     chunk_xs: &[i32],
     chunk_zs: &[i32],
     block_states: &[u16],
@@ -102,25 +105,18 @@ pub fn generate_geometry_multi(
     smooth_lighting: bool,
     sky_light_value: u8,
 ) -> JsValue {
-    let mesher = Mesher::new(
-        section_x,
-        section_y,
-        section_z,
-        section_height,
-        world_min_y,
-        world_max_y,
-        enable_lighting,
-        smooth_lighting,
-        sky_light_value,
-    );
-
-    let expected_chunk_size = (section_height * 16 * 16) as usize;
     let count = chunk_xs.len();
     if count == 0 || chunk_zs.len() != count {
         wasm_bindgen::throw_str("chunk_xs/chunk_zs must be same non-zero length");
     }
 
-    let expected_total = expected_chunk_size * count;
+    let per_chunk_size = block_states.len() / count;
+    let chunk_data_height = (per_chunk_size / (16 * 16)) as i32;
+    if chunk_data_height < section_height {
+        wasm_bindgen::throw_str("block_states too small: chunk_data_height < section_height");
+    }
+
+    let expected_total = per_chunk_size * count;
     if block_states.len() < expected_total {
         wasm_bindgen::throw_str("block_states length too small for chunk count");
     }
@@ -134,10 +130,23 @@ pub fn generate_geometry_multi(
         wasm_bindgen::throw_str("biomes length too small for chunk count");
     }
 
+    let mesher = Mesher::new(
+        section_x,
+        section_y,
+        section_z,
+        section_height,
+        section_data_start_y,
+        world_min_y,
+        world_max_y,
+        enable_lighting,
+        smooth_lighting,
+        sky_light_value,
+    );
+
     let mut chunks = Vec::with_capacity(count);
     for i in 0..count {
-        let start = i * expected_chunk_size;
-        let end = start + expected_chunk_size;
+        let start = i * per_chunk_size;
+        let end = start + per_chunk_size;
         chunks.push(ChunkData {
             block_states: &block_states[start..end],
             block_light: &block_light[start..end],
@@ -145,8 +154,8 @@ pub fn generate_geometry_multi(
             biomes: &biomes[start..end],
             chunk_x: chunk_xs[i],
             chunk_z: chunk_zs[i],
-            world_min_y: section_y,
-            world_height: section_height,
+            world_min_y: section_data_start_y,
+            world_height: chunk_data_height,
         });
     }
 

@@ -9,8 +9,8 @@ export const getChunk = () => {
   const chunkDataBuffer = Buffer.from(chunkData.data)
 
   const chunk = new Chunk({ minY: 0, worldHeight: 256, x: 0, z: 0 }) as PCChunk
-  // chunk.load(chunkDataBuffer, bitMap, true, groundUp)
-  chunk.setBlockStateId(new Vec3(0, 1, 0), 1)
+  chunk.load(chunkDataBuffer, bitMap, true, groundUp)
+  // chunk.setBlockStateId(new Vec3(0, 1, 0), 1)
   // chunk.setBlockStateId(new Vec3(0, 0, 1), 1)
 
   return chunk

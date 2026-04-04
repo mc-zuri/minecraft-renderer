@@ -1,15 +1,5 @@
 let wasm;
 
-function _assertBoolean(n) {
-    if (typeof(n) !== 'boolean') {
-        throw new Error(`expected a boolean argument, found ${typeof(n)}`);
-    }
-}
-
-function _assertNum(n) {
-    if (typeof(n) !== 'number') throw new Error(`expected a number argument, found ${typeof(n)}`);
-}
-
 function debugString(val) {
     // primitive types
     const type = typeof val;
@@ -112,22 +102,6 @@ function getUint8ArrayMemory0() {
     return cachedUint8ArrayMemory0;
 }
 
-function logError(f, args) {
-    try {
-        return f.apply(this, args);
-    } catch (e) {
-        let error = (function () {
-            try {
-                return e instanceof Error ? `${e.message}\n\nStack:\n${e.stack}` : e.toString();
-            } catch(_) {
-                return "<failed to stringify thrown value>";
-            }
-        }());
-        console.error("wasm-bindgen: imported JS function that was not marked as `catch` threw an error:", error);
-        throw e;
-    }
-}
-
 function passArray16ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 2, 2) >>> 0;
     getUint16ArrayMemory0().set(arg, ptr / 2);
@@ -150,7 +124,6 @@ function passArray8ToWasm0(arg, malloc) {
 }
 
 function passStringToWasm0(arg, malloc, realloc) {
-    if (typeof(arg) !== 'string') throw new Error(`expected a string argument, found ${typeof(arg)}`);
     if (realloc === undefined) {
         const buf = cachedTextEncoder.encode(arg);
         const ptr = malloc(buf.length, 1) >>> 0;
@@ -178,7 +151,7 @@ function passStringToWasm0(arg, malloc, realloc) {
         ptr = realloc(ptr, len, len = offset + arg.length * 3, 1) >>> 0;
         const view = getUint8ArrayMemory0().subarray(ptr + offset, ptr + len);
         const ret = cachedTextEncoder.encodeInto(arg, view);
-        if (ret.read !== arg.length) throw new Error('failed to pass whole string');
+
         offset += ret.written;
         ptr = realloc(ptr, len, offset, 1) >>> 0;
     }
@@ -227,6 +200,7 @@ let WASM_VECTOR_LEN = 0;
  * @param {number} section_height
  * @param {number} world_min_y
  * @param {number} world_max_y
+ * @param {number} section_data_start_y
  * @param {Uint16Array} block_states
  * @param {Uint8Array} block_light
  * @param {Uint8Array} sky_light
@@ -241,13 +215,7 @@ let WASM_VECTOR_LEN = 0;
  * @param {number} sky_light_value
  * @returns {any}
  */
-export function generate_geometry(section_x, section_y, section_z, section_height, world_min_y, world_max_y, block_states, block_light, sky_light, biomes, invisible_blocks, transparent_blocks, no_ao_blocks, cull_identical_blocks, occluding_blocks, enable_lighting, smooth_lighting, sky_light_value) {
-    _assertNum(section_x);
-    _assertNum(section_y);
-    _assertNum(section_z);
-    _assertNum(section_height);
-    _assertNum(world_min_y);
-    _assertNum(world_max_y);
+export function generate_geometry(section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, block_states, block_light, sky_light, biomes, invisible_blocks, transparent_blocks, no_ao_blocks, cull_identical_blocks, occluding_blocks, enable_lighting, smooth_lighting, sky_light_value) {
     const ptr0 = passArray16ToWasm0(block_states, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passArray8ToWasm0(block_light, wasm.__wbindgen_malloc);
@@ -266,10 +234,7 @@ export function generate_geometry(section_x, section_y, section_z, section_heigh
     const len7 = WASM_VECTOR_LEN;
     const ptr8 = passArray16ToWasm0(occluding_blocks, wasm.__wbindgen_malloc);
     const len8 = WASM_VECTOR_LEN;
-    _assertBoolean(enable_lighting);
-    _assertBoolean(smooth_lighting);
-    _assertNum(sky_light_value);
-    const ret = wasm.generate_geometry(section_x, section_y, section_z, section_height, world_min_y, world_max_y, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, enable_lighting, smooth_lighting, sky_light_value);
+    const ret = wasm.generate_geometry(section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, enable_lighting, smooth_lighting, sky_light_value);
     return ret;
 }
 
@@ -280,6 +245,7 @@ export function generate_geometry(section_x, section_y, section_z, section_heigh
  * @param {number} section_height
  * @param {number} world_min_y
  * @param {number} world_max_y
+ * @param {number} section_data_start_y
  * @param {Int32Array} chunk_xs
  * @param {Int32Array} chunk_zs
  * @param {Uint16Array} block_states
@@ -296,13 +262,7 @@ export function generate_geometry(section_x, section_y, section_z, section_heigh
  * @param {number} sky_light_value
  * @returns {any}
  */
-export function generate_geometry_multi(section_x, section_y, section_z, section_height, world_min_y, world_max_y, chunk_xs, chunk_zs, block_states, block_light, sky_light, biomes, invisible_blocks, transparent_blocks, no_ao_blocks, cull_identical_blocks, occluding_blocks, enable_lighting, smooth_lighting, sky_light_value) {
-    _assertNum(section_x);
-    _assertNum(section_y);
-    _assertNum(section_z);
-    _assertNum(section_height);
-    _assertNum(world_min_y);
-    _assertNum(world_max_y);
+export function generate_geometry_multi(section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, chunk_xs, chunk_zs, block_states, block_light, sky_light, biomes, invisible_blocks, transparent_blocks, no_ao_blocks, cull_identical_blocks, occluding_blocks, enable_lighting, smooth_lighting, sky_light_value) {
     const ptr0 = passArray32ToWasm0(chunk_xs, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passArray32ToWasm0(chunk_zs, wasm.__wbindgen_malloc);
@@ -325,10 +285,7 @@ export function generate_geometry_multi(section_x, section_y, section_z, section
     const len9 = WASM_VECTOR_LEN;
     const ptr10 = passArray16ToWasm0(occluding_blocks, wasm.__wbindgen_malloc);
     const len10 = WASM_VECTOR_LEN;
-    _assertBoolean(enable_lighting);
-    _assertBoolean(smooth_lighting);
-    _assertNum(sky_light_value);
-    const ret = wasm.generate_geometry_multi(section_x, section_y, section_z, section_height, world_min_y, world_max_y, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9, ptr10, len10, enable_lighting, smooth_lighting, sky_light_value);
+    const ret = wasm.generate_geometry_multi(section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9, ptr10, len10, enable_lighting, smooth_lighting, sky_light_value);
     return ret;
 }
 
@@ -367,10 +324,10 @@ async function __wbg_load(module, imports) {
 function __wbg_get_imports() {
     const imports = {};
     imports.wbg = {};
-    imports.wbg.__wbg_Error_52673b7de5a0ca89 = function() { return logError(function (arg0, arg1) {
+    imports.wbg.__wbg_Error_52673b7de5a0ca89 = function(arg0, arg1) {
         const ret = Error(getStringFromWasm0(arg0, arg1));
         return ret;
-    }, arguments) };
+    };
     imports.wbg.__wbg___wbindgen_debug_string_adfb662ae34724b6 = function(arg0, arg1) {
         const ret = debugString(arg1);
         const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -381,35 +338,35 @@ function __wbg_get_imports() {
     imports.wbg.__wbg___wbindgen_throw_dd24417ed36fc46e = function(arg0, arg1) {
         throw new Error(getStringFromWasm0(arg0, arg1));
     };
-    imports.wbg.__wbg_new_1ba21ce319a06297 = function() { return logError(function () {
+    imports.wbg.__wbg_new_1ba21ce319a06297 = function() {
         const ret = new Object();
         return ret;
-    }, arguments) };
-    imports.wbg.__wbg_new_25f239778d6112b9 = function() { return logError(function () {
+    };
+    imports.wbg.__wbg_new_25f239778d6112b9 = function() {
         const ret = new Array();
         return ret;
-    }, arguments) };
-    imports.wbg.__wbg_set_3f1d0b984ed272ed = function() { return logError(function (arg0, arg1, arg2) {
+    };
+    imports.wbg.__wbg_set_3f1d0b984ed272ed = function(arg0, arg1, arg2) {
         arg0[arg1] = arg2;
-    }, arguments) };
-    imports.wbg.__wbg_set_7df433eea03a5c14 = function() { return logError(function (arg0, arg1, arg2) {
+    };
+    imports.wbg.__wbg_set_7df433eea03a5c14 = function(arg0, arg1, arg2) {
         arg0[arg1 >>> 0] = arg2;
-    }, arguments) };
-    imports.wbg.__wbindgen_cast_2241b6af4c4b2941 = function() { return logError(function (arg0, arg1) {
+    };
+    imports.wbg.__wbindgen_cast_2241b6af4c4b2941 = function(arg0, arg1) {
         // Cast intrinsic for `Ref(String) -> Externref`.
         const ret = getStringFromWasm0(arg0, arg1);
         return ret;
-    }, arguments) };
-    imports.wbg.__wbindgen_cast_4625c577ab2ec9ee = function() { return logError(function (arg0) {
+    };
+    imports.wbg.__wbindgen_cast_4625c577ab2ec9ee = function(arg0) {
         // Cast intrinsic for `U64 -> Externref`.
         const ret = BigInt.asUintN(64, arg0);
         return ret;
-    }, arguments) };
-    imports.wbg.__wbindgen_cast_d6cd19b81560fd6e = function() { return logError(function (arg0) {
+    };
+    imports.wbg.__wbindgen_cast_d6cd19b81560fd6e = function(arg0) {
         // Cast intrinsic for `F64 -> Externref`.
         const ret = arg0;
         return ret;
-    }, arguments) };
+    };
     imports.wbg.__wbindgen_init_externref_table = function() {
         const table = wasm.__wbindgen_externrefs;
         const offset = table.grow(4);
