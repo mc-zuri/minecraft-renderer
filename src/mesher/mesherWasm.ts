@@ -5,6 +5,7 @@ import { setBlockStatesData as setMesherData } from './models'
 import { defaultMesherConfig, type MesherGeometryOutput, IS_FULL_WORLD_SECTION, SECTION_HEIGHT } from './shared'
 import { worldColumnKey, World } from './world'
 import { handleGetHeightmap } from './computeHeightmap'
+import { collectBlockEntityMetadata, type SignMeta, type HeadMeta, type BannerMeta } from './blockEntityMetadata'
 
 let wasm: typeof import('../../wasm/wasm_mesher.js') | null = null
 let wasmInitialized = false
@@ -346,6 +347,22 @@ setInterval(async () => {
         const using32Array = maxIndex > 65535
 
         // console.log('exportedSection.geometry', exportedSection.geometry)
+        const signs: Record<string, SignMeta> = {}
+        const heads: Record<string, HeadMeta> = {}
+        const banners: Record<string, BannerMeta> = {}
+        const beTarget = { signs, heads, banners }
+        const beOpts = { disableBlockEntityTextures: world.config.disableBlockEntityTextures }
+        const cursor = new Vec3(0, 0, 0)
+        for (cursor.y = y; cursor.y < y + sectionHeight; cursor.y++) {
+          for (cursor.z = z; cursor.z < z + 16; cursor.z++) {
+            for (cursor.x = x; cursor.x < x + 16; cursor.x++) {
+              const b = world.getBlock(cursor)
+              if (!b) continue
+              collectBlockEntityMetadata(b, cursor.x, cursor.y, cursor.z, beTarget, beOpts)
+            }
+          }
+        }
+
         const geometry: MesherGeometryOutput = {
           sectionYNumber: (y - (config?.worldMinY || 0)) >> 4,
           chunkKey: sectionKeyStr,
@@ -368,9 +385,9 @@ setInterval(async () => {
           indicesCount: exportedSection.geometry.indices.length,
           using32Array,
           tiles: {},
-          heads: {},
-          signs: {},
-          banners: {},
+          heads,
+          signs,
+          banners,
           hadErrors: false,
           blocksCount: wasmResult.block_count,
         }

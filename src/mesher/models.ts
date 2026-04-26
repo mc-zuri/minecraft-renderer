@@ -7,6 +7,7 @@ import { World, BlockModelPartsResolved, WorldBlock as Block, WorldBlock, worldC
 import { BlockElement, buildRotationMatrix, elemFaces, matmul3, matmulmat3, vecadd3, vecsub3 } from './modelsGeometryCommon'
 import { INVISIBLE_BLOCKS } from './worldConstants'
 import { MesherGeometryOutput, HighestBlockInfo } from './shared'
+import { collectBlockEntityMetadata } from './blockEntityMetadata'
 
 // Log function disabled by default for zero overhead in production hot loops
 const ENABLE_TS_LOGS = false
@@ -597,52 +598,7 @@ export function getSectionGeometry(sx: number, sy: number, sz: number, world: Wo
       for (cursor.x = sx; cursor.x < sx + 16; cursor.x++) {
         let block = world.getBlock(cursor, blockProvider, attr)!
         if (INVISIBLE_BLOCKS.has(block.name)) continue
-        if ((block.name.includes('_sign') || block.name === 'sign') && !world.config.disableBlockEntityTextures) {
-          const key = `${cursor.x},${cursor.y},${cursor.z}`
-          const props: any = block.getProperties()
-          const facingRotationMap = {
-            'north': 2,
-            'south': 0,
-            'west': 1,
-            'east': 3
-          }
-          const isWall = block.name.endsWith('wall_sign') || block.name.endsWith('wall_hanging_sign')
-          const isHanging = block.name.endsWith('hanging_sign')
-          attr.signs[key] = {
-            isWall,
-            isHanging,
-            rotation: isWall ? facingRotationMap[props.facing] : +props.rotation
-          }
-        } else if (block.name === 'player_head' || block.name === 'player_wall_head') {
-          const key = `${cursor.x},${cursor.y},${cursor.z}`
-          const props: any = block.getProperties()
-          const facingRotationMap = {
-            'north': 0,
-            'south': 2,
-            'west': 3,
-            'east': 1
-          }
-          const isWall = block.name === 'player_wall_head'
-          attr.heads[key] = {
-            isWall,
-            rotation: isWall ? facingRotationMap[props.facing] : +props.rotation
-          }
-        } else if (block.name.includes('_banner') && !world.config.disableBlockEntityTextures) {
-          const key = `${cursor.x},${cursor.y},${cursor.z}`
-          const props: any = block.getProperties()
-          const facingRotationMap = {
-            'north': 2,
-            'south': 0,
-            'west': 1,
-            'east': 3
-          }
-          const isWall = block.name.endsWith('_wall_banner')
-          attr.banners[key] = {
-            isWall,
-            blockName: block.name, // Pass block name for base color extraction
-            rotation: isWall ? facingRotationMap[props.facing] : (props.rotation === undefined ? 0 : +props.rotation)
-          }
-        }
+        collectBlockEntityMetadata(block, cursor.x, cursor.y, cursor.z, attr, { disableBlockEntityTextures: world.config.disableBlockEntityTextures })
         const biome = block.biome.name
 
         if (world.preflat) { // 10% perf
