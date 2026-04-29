@@ -30,6 +30,10 @@ export const defaultWorldRendererConfig = {
   _experimentalSmoothChunkLoading: true,
   _renderByChunks: false,
   autoLowerRenderDistance: false,
+  /** Disable WASM mesher worker-side conversion cache (memory hotfix for
+   * iOS Safari and other low-RAM environments). Trades performance for
+   * lower per-worker RAM. */
+  disableMesherConversionCache: false,
 
   // Rendering engine settings
   /** Face shading: vanilla Minecraft vs higher-contrast client look */

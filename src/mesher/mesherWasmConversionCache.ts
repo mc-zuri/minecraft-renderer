@@ -26,6 +26,10 @@ import type { ChunkConversionResult } from '../wasm-lib/convertChunk'
 // ~8x8 window resident. Tunable.
 export const CONVERSION_CACHE_LIMIT = 64
 
+// Active limit, mutable via `setConversionCacheLimit`. `0` disables caching
+// entirely (memory hotfix path for low-RAM environments such as iOS Safari).
+let activeLimit = CONVERSION_CACHE_LIMIT
+
 interface CacheEntry {
   chunkRef: any
   version: string
@@ -65,6 +69,13 @@ export function getOrConvertColumn(
   liveChunkRef?: any
 ): GetOrConvertResult {
   const k = keyOf(x, z)
+  if (activeLimit <= 0) {
+    // Cache disabled — bypass entirely. Drop any stale entry that may
+    // pre-date the disable call.
+    if (cache.size > 0) cache.delete(k)
+    misses++
+    return { result: convert(), hit: false }
+  }
   const e = cache.get(k)
   if (
     e
@@ -92,13 +103,30 @@ export function getOrConvertColumn(
   const result = convert()
   cache.delete(k)
   cache.set(k, { chunkRef, version, worldMinY, worldMaxY, result })
-  while (cache.size > CONVERSION_CACHE_LIMIT) {
+  while (cache.size > activeLimit) {
     const oldest = cache.keys().next().value
     if (oldest === undefined) break
     cache.delete(oldest)
   }
   misses++
   return { result, hit: false }
+}
+
+export function setConversionCacheLimit(n: number): void {
+  activeLimit = Math.max(0, n | 0)
+  if (activeLimit === 0) {
+    cache.clear()
+    return
+  }
+  while (cache.size > activeLimit) {
+    const oldest = cache.keys().next().value
+    if (oldest === undefined) break
+    cache.delete(oldest)
+  }
+}
+
+export function getConversionCacheLimit(): number {
+  return activeLimit
 }
 
 export function invalidateConversion(x: number, z: number): boolean {

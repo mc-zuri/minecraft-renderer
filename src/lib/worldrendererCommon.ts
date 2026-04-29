@@ -633,6 +633,7 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
       disableBlockEntityTextures: !this.worldRendererConfig.extraBlockRenderers,
       worldMinY: this.worldMinYRender,
       worldMaxY: this.worldMinYRender + this.worldSizeParams.worldHeight,
+      disableConversionCache: this.worldRendererConfig.disableMesherConversionCache,
     }
   }
 

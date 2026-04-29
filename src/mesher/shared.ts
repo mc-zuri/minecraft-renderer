@@ -17,6 +17,7 @@ export const defaultMesherConfig = {
   debugModelVariant: undefined as undefined | number[],
   clipWorldBelowY: undefined as undefined | number,
   disableBlockEntityTextures: false,
+  disableConversionCache: false,
 }
 
 export type CustomBlockModels = {

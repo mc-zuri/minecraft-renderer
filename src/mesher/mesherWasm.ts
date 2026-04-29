@@ -8,9 +8,11 @@ import { handleGetHeightmap, EMPTY_COLUMN_HEIGHTMAP_SENTINEL } from './computeHe
 import { collectBlockEntityMetadata, type SignMeta, type HeadMeta, type BannerMeta } from './blockEntityMetadata'
 import { SectionRequestTracker } from './mesherWasmRequestTracker'
 import {
+  CONVERSION_CACHE_LIMIT,
   clearConversionCache,
   getOrConvertColumn,
   invalidateConversion,
+  setConversionCacheLimit,
 } from './mesherWasmConversionCache'
 
 let wasm: typeof import('../../wasm/wasm_mesher.js') | null = null
@@ -152,6 +154,7 @@ const handleMessage = async (data: any) => {
     world.config = { ...world.config, ...data.config }
     globalThis.world = world
     globalThis.Vec3 = Vec3
+    setConversionCacheLimit(config.disableConversionCache ? 0 : CONVERSION_CACHE_LIMIT)
   }
 
   switch (data.type) {
