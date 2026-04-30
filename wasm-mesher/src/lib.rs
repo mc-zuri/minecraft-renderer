@@ -171,3 +171,39 @@ pub fn generate_geometry_multi(
 
     serde_wasm_bindgen::to_value(&result).expect("Failed to serialize geometry output to JS value")
 }
+
+/// Parse a 1.18+ Minecraft chunk dump (column.dump() output).
+///
+/// Returns an object: { blockStates: Uint16Array, biomes: Uint8Array, bytesRead: number }.
+/// Throws on parse error.
+#[wasm_bindgen(js_name = parseChunkDump118)]
+pub fn parse_chunk_dump_1_18(
+    buffer: &[u8],
+    num_sections: u32,
+    max_bits_per_block: u8,
+    max_bits_per_biome: u8,
+) -> JsValue {
+    match dump_parser::parse_dump(buffer, num_sections as usize, max_bits_per_block, max_bits_per_biome) {
+        Ok(r) => {
+            let obj = js_sys::Object::new();
+            let blocks_view = js_sys::Uint16Array::new_with_length(r.block_states.len() as u32);
+            blocks_view.copy_from(&r.block_states);
+            let biomes_view = js_sys::Uint8Array::new_with_length(r.biomes.len() as u32);
+            biomes_view.copy_from(&r.biomes);
+            js_sys::Reflect::set(&obj, &JsValue::from_str("blockStates"), &blocks_view).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("biomes"), &biomes_view).unwrap();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("bytesRead"), &JsValue::from_f64(r.bytes_read as f64)).unwrap();
+            obj.into()
+        }
+        Err(e) => wasm_bindgen::throw_str(&format!("parseChunkDump118 error: {}", e)),
+    }
+}
+
+/// Unpack a single light section (2048 bytes, BitArrayNoSpan bpv=4) into 4096 nibble values.
+#[wasm_bindgen(js_name = unpackLightSection118)]
+pub fn unpack_light_section_1_18(buffer: &[u8]) -> Vec<u8> {
+    match dump_parser::unpack_light_section(buffer) {
+        Ok(v) => v,
+        Err(e) => wasm_bindgen::throw_str(&format!("unpackLightSection118 error: {}", e)),
+    }
+}
