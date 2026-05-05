@@ -336,11 +336,17 @@ pub fn assemble_light_full_column(
         if !in_chunk { continue; }
         let s = section_idx_in_chunk as usize;
         let base = s * 16 * 256;
+        // BitArrayNoSpan stores 16 nibbles per i64; prismarine writes longs as 8 bytes
+        // big-endian. So within each 8-byte run (one long), byte offset 0 holds nibble
+        // positions 14-15, byte offset 7 holds positions 0-1. We mirror that here.
         for byte_idx in 0..LIGHT_SECTION_BUFFER_BYTES {
             let byte = section[byte_idx];
             let v0 = byte & 0x0F;
             let v1 = (byte >> 4) & 0x0F;
-            let block0 = byte_idx * 2;
+            let long_idx = byte_idx >> 3;
+            let off_in_long = byte_idx & 0x7;
+            let pair_pos = 7 - off_in_long; // BE byte → nibble-pair position inside long
+            let block0 = long_idx * 16 + pair_pos * 2;
             let block1 = block0 + 1;
             for (block_local, value) in [(block0, v0), (block1, v1)] {
                 let y_in = block_local >> 8;

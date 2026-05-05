@@ -144,7 +144,7 @@ pub fn parse_map_chunk_v18plus(
         &sky_light_mask,
         &empty_sky_light_mask,
         num_sections,
-        15, // default for sections the server omitted entirely
+        0, // sections the server omitted entirely stay 0 (matches prismarine-chunk loadParsedLight)
     )?;
     let block_full = build_full_column_light(
         &block_light,
