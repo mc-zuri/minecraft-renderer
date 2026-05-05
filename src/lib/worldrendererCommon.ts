@@ -857,6 +857,20 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
       this.removeColumn(x, z)
     })
 
+    worldEmitter.on('setRawMapChunk', ({ x, z, rawPacket, protocol, numSections }) => {
+      // Stage 3: forward raw map_chunk bytes to all mesher workers so the
+      // WASM mesher can parse them directly via `parseMapChunkV18Plus` and
+      // skip the JS hot loop `convertChunkToWasm`. The legacy `chunk`
+      // message is still sent (via `addColumn`) — workers prefer raw when
+      // available, fall back to the column otherwise.
+      for (const worker of this.workers) {
+        worker.postMessage({
+          type: 'setRawMapChunk',
+          x, z, rawPacket, protocol, numSections,
+        })
+      }
+    })
+
     worldEmitter.on('blockUpdate', ({ pos, stateId }) => {
       this.setBlockStateId(new Vec3(pos.x, pos.y, pos.z), stateId)
     })

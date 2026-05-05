@@ -1,5 +1,5 @@
 import { Vec3 } from 'vec3'
-import { convertChunkToWasm } from '../wasm-lib/convertChunk'
+import { convertChunkToWasm, getBlockMeta, type ChunkConversionResult } from '../wasm-lib/convertChunk'
 import { extractColumnHeightmap, splitColumnWasmOutputToSections } from '../wasm-lib/render-from-wasm'
 import { setBlockStatesData as setMesherData } from './models'
 import { defaultMesherConfig, type MesherGeometryOutput, SECTION_HEIGHT } from './shared'
@@ -134,6 +134,66 @@ const softCleanup = () => {
   globalThis.world = world
 }
 
+// Stage 3 (issue-15-wasm): cache of raw `map_chunk` packets keyed by
+// `"x,z"`. Populated from the main thread (`setRawMapChunk` message), used
+// to bypass the JS hot loop `convertChunkToWasm` for protocol >= 757
+// (1.18+). Block updates / chunk unload invalidate entries so we fall back
+// to the legacy column-walk path until the next `map_chunk` arrives.
+interface RawMapChunkEntry {
+  rawPacket: Uint8Array
+  protocol: number
+  numSections: number
+}
+const rawMapChunkCache = new Map<string, RawMapChunkEntry>()
+const rawCacheKey = (x: number, z: number) => `${x},${z}`
+
+// Mirrors `convertChunkToWasm`'s output (same layout: x + z*16 + y*256,
+// y outer) so it can be dropped straight into `generate_geometry`.
+const convertRawMapChunkToWasm = (
+  raw: RawMapChunkEntry,
+  version: string
+): ChunkConversionResult | null => {
+  if (!wasm || !(wasm as any).parseMapChunkV18Plus) return null
+  // 1.18 introduced the new chunk format; on earlier protocols the packet
+  // shape differs and our parser would throw. Fall back to the JS path.
+  if (raw.protocol < 757) return null
+  // max_bits_per_block / max_bits_per_biome match the parity-tested defaults
+  // in `wasm-mesher/src/parser_v18plus.rs` (see Stage 2 fixtures).
+  const MAX_BITS_PER_BLOCK = 8
+  const MAX_BITS_PER_BIOME = 3
+  let parsed: any
+  try {
+    parsed = (wasm as any).parseMapChunkV18Plus(
+      raw.rawPacket,
+      raw.numSections,
+      MAX_BITS_PER_BLOCK,
+      MAX_BITS_PER_BIOME,
+      raw.protocol
+    )
+  } catch (err) {
+    console.warn('[WASM Mesher] parseMapChunkV18Plus failed, falling back:', err)
+    return null
+  }
+  const meta = getBlockMeta(version)
+  const blockStates: Uint16Array = parsed.blockStates
+  let blockCount = 0
+  for (let i = 0; i < blockStates.length; i++) {
+    if (blockStates[i] !== 0) blockCount++
+  }
+  return {
+    blockStates,
+    blockLight: parsed.blockLight,
+    skyLight: parsed.skyLight,
+    biomesArray: parsed.biomes,
+    invisibleBlocks: meta.invisibleBlocks,
+    transparentBlocks: meta.transparentBlocks,
+    noAoBlocks: meta.noAoBlocks,
+    cullIdenticalBlocks: meta.cullIdenticalBlocks,
+    occludingBlocks: meta.occludingBlocks,
+    blockCount,
+  }
+}
+
 const handleMessage = async (data: any) => {
   const globalVar: any = globalThis
 
@@ -213,6 +273,7 @@ const handleMessage = async (data: any) => {
     }
     case 'unloadChunk': {
       invalidateConversion(data.x, data.z)
+      rawMapChunkCache.delete(rawCacheKey(data.x, data.z))
       if (!world) break
       world.removeColumn(data.x, data.z)
       world.customBlockModels.delete(`${data.x},${data.z}`)
@@ -230,10 +291,29 @@ const handleMessage = async (data: any) => {
       // In-place mutation preserves chunk identity; explicit invalidation
       // is required so the next tick recomputes from current block state.
       invalidateConversion(chunkX, chunkZ)
+      // Stage 3: the cached raw map_chunk no longer matches the live
+      // column after a block update — drop it so the next mesh tick walks
+      // the (now-updated) prismarine column instead.
+      rawMapChunkCache.delete(rawCacheKey(chunkX, chunkZ))
       const chunkKey = `${chunkX},${chunkZ}`
       if (data.customBlockModels) {
         world?.customBlockModels.set(chunkKey, data.customBlockModels)
       }
+      break
+    }
+    case 'setRawMapChunk': {
+      // Stage 3 (issue-15-wasm): main thread captured the raw map_chunk
+      // bytes mineflayer received and forwarded them here. We cache by
+      // (x,z); the next mesh tick will prefer this raw entry over the JS
+      // column-walk path. Invalidate the existing conversion cache entry
+      // so the next mesh tick picks the new path even if the column
+      // identity is unchanged.
+      rawMapChunkCache.set(rawCacheKey(data.x, data.z), {
+        rawPacket: data.rawPacket as Uint8Array,
+        protocol: data.protocol as number,
+        numSections: data.numSections as number,
+      })
+      invalidateConversion(data.x, data.z)
       break
     }
     case 'reset': {
@@ -241,6 +321,7 @@ const handleMessage = async (data: any) => {
       dirtySections.clear()
       requestTracker.clear()
       clearConversionCache()
+      rawMapChunkCache.clear()
       globalVar.mcData = null
       globalVar.loadedData = null
       allDataReady = false
@@ -393,6 +474,7 @@ function processColumnTick() {
 
         const conversions = chunksToUse.map(({ x: cx, z: cz, chunk }) => {
           const cs = performance.now()
+          const rawEntry = rawMapChunkCache.get(rawCacheKey(cx, cz))
           const { result: conv, hit } = getOrConvertColumn(
             cx,
             cz,
@@ -400,15 +482,24 @@ function processColumnTick() {
             version,
             worldMinY,
             worldMaxY,
-            () => convertChunkToWasm(
-              chunk,
-              version,
-              cx,
-              cz,
-              worldMinY,
-              worldMaxY
-              // No sectionY/sectionHeight => full column conversion.
-            ),
+            () => {
+              // Stage 3: prefer the raw map_chunk path when we have the
+              // bytes and the WASM parser supports the protocol. Fall
+              // back to the JS column walk otherwise.
+              if (rawEntry) {
+                const fast = convertRawMapChunkToWasm(rawEntry, version)
+                if (fast) return fast
+              }
+              return convertChunkToWasm(
+                chunk,
+                version,
+                cx,
+                cz,
+                worldMinY,
+                worldMaxY
+                // No sectionY/sectionHeight => full column conversion.
+              )
+            },
             chunk
           )
           const ce = performance.now()

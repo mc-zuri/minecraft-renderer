@@ -38,6 +38,20 @@ export interface UnloadChunkData {
   z: number
 }
 
+/**
+ * Raw `map_chunk` packet payload forwarded to the WASM mesher worker.
+ * Stage 3 of issue-15-wasm — lets the worker call `parseMapChunkV18Plus`
+ * directly on the bytes mineflayer received, bypassing the JS hot loop
+ * `convertChunkToWasm` for protocol >= 757 (1.18+).
+ */
+export interface RawMapChunkData {
+  x: number
+  z: number
+  rawPacket: Uint8Array
+  protocol: number
+  numSections: number
+}
+
 /** Biome update event data */
 export interface BiomeUpdateData {
   biome: any
@@ -58,6 +72,7 @@ export type WorldViewEvents = {
   markAsLoaded: (data: ChunkPos) => void
   unloadChunk: (data: UnloadChunkData) => void
   loadChunk: (data: LoadChunkData) => void
+  setRawMapChunk: (data: RawMapChunkData) => void
   updateLight: (data: { pos: Vec3 }) => void
   onWorldSwitch: () => void
   end: () => void

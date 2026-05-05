@@ -53,7 +53,7 @@ const isLikelyFullCubeBlockName = (name: string) => {
   return true
 }
 
-const getBlockMeta = (version: string): BlockMeta => {
+export const getBlockMeta = (version: string): BlockMeta => {
   const cached = metaCache.get(version)
   if (cached) return cached
 
