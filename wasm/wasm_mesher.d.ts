@@ -66,6 +66,20 @@ export function parseChunkDump118FullColumnAll(dump_buffer: Uint8Array, sky_ligh
 export function parseChunkDump118NoMarshal(buffer: Uint8Array, num_sections: number, max_bits_per_block: number, max_bits_per_biome: number): number;
 
 /**
+ * Stage-3 entry: parse a raw `map_chunk` packet (1.18+) into the same shape as
+ * `parseChunkDump118FullColumnAll` so the worker can drop it straight into
+ * `generate_geometry`.
+ *
+ * `raw_packet` is the buffer captured from `bot._client.on('raw.map_chunk', ...)`;
+ * it includes the leading packet-id varint (we skip it). `protocol` selects
+ * the version-specific quirks (heightmaps NBT, trust_edges, anonymous NBT, etc.).
+ *
+ * Returns: `{ x, z, blockStates: Uint16Array, biomes: Uint8Array,
+ *             blockLight: Uint8Array, skyLight: Uint8Array, bytesRead }`.
+ */
+export function parseMapChunkV18Plus(raw_packet: Uint8Array, num_sections: number, max_bits_per_block: number, max_bits_per_biome: number, protocol: number): any;
+
+/**
  * Unpack a single light section (2048 bytes, BitArrayNoSpan bpv=4) into 4096 nibble values.
  */
 export function unpackLightSection118(buffer: Uint8Array): Uint8Array;
@@ -82,6 +96,7 @@ export interface InitOutput {
   readonly parseChunkDump118FullColumnAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => any;
   readonly generateGeometryFromDump118: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: number, e1: number, f1: number, g1: number, h1: number, i1: number, j1: number, k1: number) => any;
   readonly parseChunkDump118FullColumn: (a: number, b: number, c: number, d: number, e: number) => any;
+  readonly parseMapChunkV18Plus: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_exn_store: (a: number) => void;

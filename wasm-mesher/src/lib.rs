@@ -400,3 +400,48 @@ pub fn parse_chunk_dump_1_18_full_column(
         Err(e) => wasm_bindgen::throw_str(&format!("parseChunkDump118FullColumn error: {}", e)),
     }
 }
+
+/// Stage-3 entry: parse a raw `map_chunk` packet (1.18+) into the same shape as
+/// `parseChunkDump118FullColumnAll` so the worker can drop it straight into
+/// `generate_geometry`.
+///
+/// `raw_packet` is the buffer captured from `bot._client.on('raw.map_chunk', ...)`;
+/// it includes the leading packet-id varint (we skip it). `protocol` selects
+/// the version-specific quirks (heightmaps NBT, trust_edges, anonymous NBT, etc.).
+///
+/// Returns: `{ x, z, blockStates: Uint16Array, biomes: Uint8Array,
+///             blockLight: Uint8Array, skyLight: Uint8Array, bytesRead }`.
+#[wasm_bindgen(js_name = parseMapChunkV18Plus)]
+pub fn parse_map_chunk_v18plus_js(
+    raw_packet: &[u8],
+    num_sections: u32,
+    max_bits_per_block: u8,
+    max_bits_per_biome: u8,
+    protocol: i32,
+) -> JsValue {
+    let flags = parser_v18plus::McVersionFlags::for_protocol(protocol);
+    let result = match parser_v18plus::parse_map_chunk_v18plus(
+        raw_packet, num_sections as usize, max_bits_per_block, max_bits_per_biome, flags,
+    ) {
+        Ok(r) => r,
+        Err(e) => wasm_bindgen::throw_str(&format!("parseMapChunkV18Plus error: {}", e)),
+    };
+
+    let obj = js_sys::Object::new();
+    let blocks_view = js_sys::Uint16Array::new_with_length(result.block_states.len() as u32);
+    blocks_view.copy_from(&result.block_states);
+    let biomes_view = js_sys::Uint8Array::new_with_length(result.biomes.len() as u32);
+    biomes_view.copy_from(&result.biomes);
+    let block_light_view = js_sys::Uint8Array::new_with_length(result.block_light.len() as u32);
+    block_light_view.copy_from(&result.block_light);
+    let sky_light_view = js_sys::Uint8Array::new_with_length(result.sky_light.len() as u32);
+    sky_light_view.copy_from(&result.sky_light);
+    js_sys::Reflect::set(&obj, &JsValue::from_str("x"), &JsValue::from_f64(result.x as f64)).unwrap();
+    js_sys::Reflect::set(&obj, &JsValue::from_str("z"), &JsValue::from_f64(result.z as f64)).unwrap();
+    js_sys::Reflect::set(&obj, &JsValue::from_str("blockStates"), &blocks_view).unwrap();
+    js_sys::Reflect::set(&obj, &JsValue::from_str("biomes"), &biomes_view).unwrap();
+    js_sys::Reflect::set(&obj, &JsValue::from_str("blockLight"), &block_light_view).unwrap();
+    js_sys::Reflect::set(&obj, &JsValue::from_str("skyLight"), &sky_light_view).unwrap();
+    js_sys::Reflect::set(&obj, &JsValue::from_str("bytesRead"), &JsValue::from_f64(result.bytes_read as f64)).unwrap();
+    obj.into()
+}

@@ -480,6 +480,31 @@ export function parseChunkDump118NoMarshal(buffer, num_sections, max_bits_per_bl
 }
 
 /**
+ * Stage-3 entry: parse a raw `map_chunk` packet (1.18+) into the same shape as
+ * `parseChunkDump118FullColumnAll` so the worker can drop it straight into
+ * `generate_geometry`.
+ *
+ * `raw_packet` is the buffer captured from `bot._client.on('raw.map_chunk', ...)`;
+ * it includes the leading packet-id varint (we skip it). `protocol` selects
+ * the version-specific quirks (heightmaps NBT, trust_edges, anonymous NBT, etc.).
+ *
+ * Returns: `{ x, z, blockStates: Uint16Array, biomes: Uint8Array,
+ *             blockLight: Uint8Array, skyLight: Uint8Array, bytesRead }`.
+ * @param {Uint8Array} raw_packet
+ * @param {number} num_sections
+ * @param {number} max_bits_per_block
+ * @param {number} max_bits_per_biome
+ * @param {number} protocol
+ * @returns {any}
+ */
+export function parseMapChunkV18Plus(raw_packet, num_sections, max_bits_per_block, max_bits_per_biome, protocol) {
+    const ptr0 = passArray8ToWasm0(raw_packet, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.parseMapChunkV18Plus(ptr0, len0, num_sections, max_bits_per_block, max_bits_per_biome, protocol);
+    return ret;
+}
+
+/**
  * Unpack a single light section (2048 bytes, BitArrayNoSpan bpv=4) into 4096 nibble values.
  * @param {Uint8Array} buffer
  * @returns {Uint8Array}
