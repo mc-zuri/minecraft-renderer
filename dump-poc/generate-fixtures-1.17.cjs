@@ -168,6 +168,7 @@ function makeFixture (name, column) {
   const blockStates = new Uint16Array(totalCells)
   const blockLight = new Uint8Array(totalCells)
   const skyLight = new Uint8Array(totalCells)
+  const biomesPerBlock = new Uint8Array(totalCells)
   // 1.17 biomes are flat 4×4×(worldHeight/4) = 4*4*64 = 1024 cells
   const biomeCells = 4 * 4 * (column.worldHeight / 4)
   const biomes = new Int32Array(biomeCells)
@@ -180,6 +181,7 @@ function makeFixture (name, column) {
         blockStates[idx] = column.getBlockStateId(p)
         blockLight[idx] = column.getBlockLight(p)
         skyLight[idx] = column.getSkyLight(p)
+        biomesPerBlock[idx] = column.getBiome(p) & 0xFF
         idx++
       }
     }
@@ -215,6 +217,7 @@ function makeFixture (name, column) {
       blockLight_b64: Buffer.from(blockLight.buffer).toString('base64'),
       skyLight_b64: Buffer.from(skyLight.buffer).toString('base64'),
       biomes_b64: Buffer.from(biomes.buffer).toString('base64'),
+      biomesPerBlock_b64: Buffer.from(biomesPerBlock.buffer).toString('base64'),
     },
   }
 }
