@@ -13,6 +13,34 @@
 export function generateGeometryFromDump118(section_x: number, section_y: number, section_z: number, section_height: number, world_min_y: number, world_max_y: number, section_data_start_y: number, dump_buffer: Uint8Array, sky_light_concat: Uint8Array, block_light_concat: Uint8Array, sky_light_mask: Uint32Array, block_light_mask: Uint32Array, empty_sky_light_mask: Uint32Array, empty_block_light_mask: Uint32Array, num_sections: number, max_bits_per_block: number, max_bits_per_biome: number, invisible_blocks: Uint16Array, transparent_blocks: Uint16Array, no_ao_blocks: Uint16Array, cull_identical_blocks: Uint16Array, occluding_blocks: Uint16Array, enable_lighting: boolean, smooth_lighting: boolean, sky_light_value: number): any;
 
 /**
+ * Fused parse+mesh for 1.18+ `map_chunk` wire format.
+ *
+ * Parses the raw packet inside Rust, meshes immediately, and returns ONLY the
+ * final `GeometryOutput` — no intermediate typed arrays are materialised on the
+ * JS heap.  This halves the number of JS<->WASM boundary crossings per column
+ * and removes the largest per-column allocations (Uint16Array block_states +
+ * three Uint8Arrays for biomes/light).
+ *
+ * `raw_packet` is the buffer captured from `bot._client.on('raw.map_chunk', ...)`;
+ * it includes the leading packet-id varint (we skip it).
+ */
+export function generateGeometryFromMapChunkV18Plus(raw_packet: Uint8Array, num_sections: number, max_bits_per_block: number, max_bits_per_biome: number, protocol: number, section_x: number, section_y: number, section_z: number, section_height: number, world_min_y: number, world_max_y: number, section_data_start_y: number, invisible_blocks: Uint16Array, transparent_blocks: Uint16Array, no_ao_blocks: Uint16Array, cull_identical_blocks: Uint16Array, occluding_blocks: Uint16Array, enable_lighting: boolean, smooth_lighting: boolean, sky_light_value: number): any;
+
+/**
+ * Fused parse+mesh for 1.16 / 1.17 chunk sections.
+ *
+ * Parses `chunk_data` (the raw section bytes from a `map_chunk` packet) inside
+ * Rust and meshes immediately, returning only `GeometryOutput`.  Block states
+ * and biomes never leave WASM memory.
+ *
+ * Light arrays (`sky_light` / `block_light`) come from a pre-parsed
+ * `update_light` packet and are passed by reference (the JS-side update-light
+ * cache already holds them as `Uint8Array`).  When light is absent the
+ * function fills defaults (sky=15, block=0) internally.
+ */
+export function generateGeometryFromParsedV16V17(chunk_data: Uint8Array, bit_map_lo_hi: Uint32Array, num_sections: number, max_bits_per_block: number, biomes_cells: Int32Array, default_biome: number, sky_light: Uint8Array, block_light: Uint8Array, section_x: number, section_y: number, section_z: number, section_height: number, world_min_y: number, world_max_y: number, section_data_start_y: number, invisible_blocks: Uint16Array, transparent_blocks: Uint16Array, no_ao_blocks: Uint16Array, cull_identical_blocks: Uint16Array, occluding_blocks: Uint16Array, enable_lighting: boolean, smooth_lighting: boolean, sky_light_value: number): any;
+
+/**
  * Main entry point for generating geometry
  *
  * Input: Serialized chunk data as TypedArrays
@@ -144,8 +172,10 @@ export interface InitOutput {
   readonly parseChunkDump118FullColumnAll: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => any;
   readonly generateGeometryFromDump118: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: number, e1: number, f1: number, g1: number, h1: number, i1: number, j1: number, k1: number) => any;
   readonly parseChunkDump118FullColumn: (a: number, b: number, c: number, d: number, e: number) => any;
+  readonly generateGeometryFromMapChunkV18Plus: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number) => any;
   readonly parseMapChunkV18Plus: (a: number, b: number, c: number, d: number, e: number, f: number) => any;
   readonly parseChunkSectionsV16V17: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => any;
+  readonly generateGeometryFromParsedV16V17: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: number, e1: number, f1: number, g1: number) => any;
   readonly parseUpdateLightV17: (a: number, b: number, c: number) => any;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

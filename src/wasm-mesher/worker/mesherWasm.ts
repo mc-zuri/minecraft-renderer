@@ -427,6 +427,97 @@ const convertParsedV16ToWasm = (
   }
 }
 
+// ---------------------------------------------------------------------------
+// Fused parse+mesh helpers (single WASM call, no typed arrays in JS heap)
+// ---------------------------------------------------------------------------
+
+const MAX_BITS_PER_BLOCK = 8
+const MAX_BITS_PER_BIOME = 3
+
+/// Fused single-column mesh for 1.18+ raw map_chunk.
+/// Returns the GeometryOutput directly (or null on failure → fallback).
+const meshColumnFromRawV18Plus = (
+  raw: RawMapChunkEntry,
+  x: number,
+  z: number,
+  worldMinY: number,
+  worldMaxY: number,
+  meta: ReturnType<typeof getBlockMeta>
+): any | null => {
+  if (!wasm || !(wasm as any).generateGeometryFromMapChunkV18Plus) return null
+  if (raw.protocol < 757) return null
+  const columnHeight = worldMaxY - worldMinY
+  try {
+    return (wasm as any).generateGeometryFromMapChunkV18Plus(
+      raw.rawPacket,
+      raw.numSections,
+      MAX_BITS_PER_BLOCK,
+      MAX_BITS_PER_BIOME,
+      raw.protocol,
+      x, worldMinY, z, columnHeight,
+      worldMinY, worldMaxY,
+      worldMinY,
+      meta.invisibleBlocks,
+      meta.transparentBlocks,
+      meta.noAoBlocks,
+      meta.cullIdenticalBlocks,
+      meta.occludingBlocks,
+      config?.enableLighting !== false,
+      config?.smoothLighting !== false,
+      config?.skyLight || 15
+    )
+  } catch (err) {
+    console.warn('[WASM Mesher] generateGeometryFromMapChunkV18Plus failed, falling back:', err)
+    return null
+  }
+}
+
+/// Fused single-column mesh for 1.16 / 1.17 pre-parsed chunk sections.
+const meshColumnFromParsedV16V17 = (
+  chunkData: Uint8Array,
+  bitMapLoHi: Uint32Array,
+  numSections: number,
+  maxBitsPerBlock: number,
+  biomesCells: Int32Array | undefined,
+  defaultBiome: number,
+  skyLight: Uint8Array | null,
+  blockLight: Uint8Array | null,
+  x: number,
+  z: number,
+  worldMinY: number,
+  worldMaxY: number,
+  meta: ReturnType<typeof getBlockMeta>
+): any | null => {
+  if (!wasm || !(wasm as any).generateGeometryFromParsedV16V17) return null
+  const columnHeight = worldMaxY - worldMinY
+  try {
+    return (wasm as any).generateGeometryFromParsedV16V17(
+      chunkData,
+      bitMapLoHi,
+      numSections,
+      maxBitsPerBlock,
+      biomesCells ?? new Int32Array(0),
+      defaultBiome,
+      skyLight ?? new Uint8Array(0),
+      blockLight ?? new Uint8Array(0),
+      x, worldMinY, z, columnHeight,
+      worldMinY, worldMaxY,
+      worldMinY,
+      meta.invisibleBlocks,
+      meta.transparentBlocks,
+      meta.noAoBlocks,
+      meta.cullIdenticalBlocks,
+      meta.occludingBlocks,
+      config?.enableLighting !== false,
+      config?.smoothLighting !== false,
+      config?.skyLight || 15
+    )
+  } catch (err) {
+    console.warn('[WASM Mesher] generateGeometryFromParsedV16V17 failed, falling back:', err)
+    return null
+  }
+}
+
 const handleMessage = async (data: any) => {
   const globalVar: any = globalThis
 
@@ -759,122 +850,157 @@ function processColumnTick() {
         const chunksToUse = collectChunksForColumn(x, z)
         const chunkCount = chunksToUse.length
 
-        const conversions = chunksToUse.map(({ x: cx, z: cz, chunk }) => {
-          const cs = performance.now()
-          const rawEntry = rawMapChunkCache.get(rawCacheKey(cx, cz))
-          const v17Entry = parsedV17Cache.get(rawCacheKey(cx, cz))
-          const v17Light = updateLightV17Cache.get(rawCacheKey(cx, cz))
-          const v16Entry = parsedV16Cache.get(rawCacheKey(cx, cz))
-          const v16Light = updateLightV16Cache.get(rawCacheKey(cx, cz))
-          const { result: conv, hit } = getOrConvertColumn(
-            cx,
-            cz,
-            chunk,
-            version,
-            worldMinY,
-            worldMaxY,
-            () => {
-              // Stage 3: prefer the raw map_chunk path when we have the
-              // bytes and the WASM parser supports the protocol. Fall
-              // back to the JS column walk otherwise.
-              if (rawEntry) {
-                const fast = convertRawMapChunkToWasm(rawEntry, version)
-                if (fast) return fast
-              }
-              // 1.17 path: pre-parsed sections from main thread.
-              if (v17Entry) {
-                const fast = convertParsedV17ToWasm(v17Entry, v17Light, version)
-                if (fast) return fast
-              }
-              // 1.16 path: same WASM parser as v17 but separate cache —
-              // see `convertParsedV16ToWasm` for the parameter rationale.
-              if (v16Entry) {
-                const fast = convertParsedV16ToWasm(v16Entry, v16Light, version)
-                if (fast) return fast
-              }
-              return convertChunkToWasm(
-                chunk,
-                version,
-                cx,
-                cz,
-                worldMinY,
-                worldMaxY
-                // No sectionY/sectionHeight => full column conversion.
-              )
-            },
-            chunk
-          )
-          const ce = performance.now()
-          if (hit) preCacheHits++
-          else preCacheMisses++
-          if (cx === x && cz === z) {
-            preTargetConvert += ce - cs
-          } else {
-            preNeighborConvert += ce - cs
-            preNeighborCount++
-          }
-          return conv
-        })
-
-        const {
-          invisibleBlocks,
-          transparentBlocks,
-          noAoBlocks,
-          cullIdenticalBlocks,
-          occludingBlocks,
-        } = conversions[0]
-
         let wasmResult: any
-        let t1: number
-        if (chunkCount === 1 || !(wasm as any).generate_geometry_multi) {
-          // Single-chunk path: no discrete typed-array build/copy step
-          // (the per-chunk arrays from convertChunkToWasm are passed
-          // straight through). preTypedArrayBuild stays 0.
-          const { blockStates, blockLight, skyLight, biomesArray } = conversions[0]
-          t1 = performance.now()
-          wasmResult = wasm.generate_geometry(
-            x, worldMinY, z, columnHeight,
-            worldMinY, worldMaxY,
-            worldMinY,
-            blockStates, blockLight, skyLight, biomesArray,
-            invisibleBlocks, transparentBlocks, noAoBlocks, cullIdenticalBlocks, occludingBlocks,
-            config?.enableLighting !== false,
-            config?.smoothLighting !== false,
-            config?.skyLight || 15
-          )
-        } else {
-          const tBuildStart = performance.now()
-          const perChunkLen = conversions[0].blockStates.length
-          const xs = new Int32Array(chunkCount)
-          const zs = new Int32Array(chunkCount)
-          const blockStatesAll = new Uint16Array(perChunkLen * chunkCount)
-          const blockLightAll = new Uint8Array(perChunkLen * chunkCount)
-          const skyLightAll = new Uint8Array(perChunkLen * chunkCount)
-          const biomesAll = new Uint8Array(perChunkLen * chunkCount)
+        let t1 = 0
+        let usedFusedPath = false
 
-          for (let i = 0; i < chunkCount; i++) {
-            const c = conversions[i]
-            xs[i] = chunksToUse[i].x
-            zs[i] = chunksToUse[i].z
-            blockStatesAll.set(c.blockStates, perChunkLen * i)
-            blockLightAll.set(c.blockLight, perChunkLen * i)
-            skyLightAll.set(c.skyLight, perChunkLen * i)
-            biomesAll.set(c.biomesArray, perChunkLen * i)
+        // ------------------------------------------------------------------
+        // Fused fast-path: for single-column meshing (no neighbours), parse
+        // and mesh in ONE WASM call so no typed arrays leave Rust memory.
+        // Falls back to the old two-step path on any failure.
+        // ------------------------------------------------------------------
+        if (chunkCount === 1) {
+          const rawEntry = rawMapChunkCache.get(rawCacheKey(x, z))
+          const v17Entry = parsedV17Cache.get(rawCacheKey(x, z))
+          const v16Entry = parsedV16Cache.get(rawCacheKey(x, z))
+          const meta = getBlockMeta(version)
+
+          if (rawEntry) {
+            wasmResult = meshColumnFromRawV18Plus(rawEntry, x, z, worldMinY, worldMaxY, meta)
+          } else if (v17Entry) {
+            const v17Light = updateLightV17Cache.get(rawCacheKey(x, z))
+            wasmResult = meshColumnFromParsedV16V17(
+              v17Entry.chunkData, v17Entry.bitMapLoHi, v17Entry.numSections, v17Entry.maxBitsPerBlock,
+              v17Entry.biomes, 1,
+              v17Light?.skyLight ?? null, v17Light?.blockLight ?? null,
+              x, z, worldMinY, worldMaxY, meta
+            )
+          } else if (v16Entry) {
+            const v16Light = updateLightV16Cache.get(rawCacheKey(x, z))
+            const bitMapLoHi = new Uint32Array([v16Entry.bitMap >>> 0, 0])
+            wasmResult = meshColumnFromParsedV16V17(
+              v16Entry.chunkData, bitMapLoHi, 16, 15,
+              v16Entry.biomes, 1,
+              v16Light?.skyLight ?? null, v16Light?.blockLight ?? null,
+              x, z, worldMinY, worldMaxY, meta
+            )
           }
-          preTypedArrayBuild = performance.now() - tBuildStart
 
-          t1 = performance.now()
-          wasmResult = (wasm as any).generate_geometry_multi(
-            x, worldMinY, z, columnHeight,
-            worldMinY, worldMaxY,
-            worldMinY,
-            xs, zs,
-            blockStatesAll, blockLightAll, skyLightAll, biomesAll,
-            invisibleBlocks, transparentBlocks, noAoBlocks, cullIdenticalBlocks, occludingBlocks,
-            config?.enableLighting !== false,
-            config?.smoothLighting !== false,
-            config?.skyLight || 15
-          )
+          if (wasmResult) {
+            usedFusedPath = true
+            t1 = performance.now()
+            wasmPhase = t1 - t0
+            preTargetConvert = wasmPhase
+            // prePhase stays 0 — no JS conversion loop ran.
+          }
+        }
+
+        if (!wasmResult) {
+          // --- Old two-step path (multi-column or fused fallback) ---
+          const conversions = chunksToUse.map(({ x: cx, z: cz, chunk }) => {
+            const cs = performance.now()
+            const rawEntry = rawMapChunkCache.get(rawCacheKey(cx, cz))
+            const v17Entry = parsedV17Cache.get(rawCacheKey(cx, cz))
+            const v17Light = updateLightV17Cache.get(rawCacheKey(cx, cz))
+            const v16Entry = parsedV16Cache.get(rawCacheKey(cx, cz))
+            const v16Light = updateLightV16Cache.get(rawCacheKey(cx, cz))
+
+            let conv: ChunkConversionResult | null = null
+            let hit = false
+
+            // WASM fast paths — parse is already fast (2.19× over JS), no
+            // cache needed.  Bypass getOrConvertColumn so the conversion
+            // cache only holds JS-fallback results.  When a WASM helper
+            // returns null (unsupported protocol, parser error, …) we MUST
+            // fall through to the JS column walk — otherwise the column
+            // would render as empty geometry.
+            if (rawEntry) {
+              conv = convertRawMapChunkToWasm(rawEntry, version)
+            } else if (v17Entry) {
+              conv = convertParsedV17ToWasm(v17Entry, v17Light, version)
+            } else if (v16Entry) {
+              conv = convertParsedV16ToWasm(v16Entry, v16Light, version)
+            }
+
+            if (!conv) {
+              // JS-fallback (column walk) — still cached, since this is the
+              // expensive path the conversion cache was built for.
+              const cached = getOrConvertColumn(
+                cx, cz, chunk, version, worldMinY, worldMaxY,
+                () => convertChunkToWasm(chunk, version, cx, cz, worldMinY, worldMaxY),
+                chunk
+              )
+              conv = cached.result
+              hit = cached.hit
+            }
+
+            const ce = performance.now()
+            if (hit) preCacheHits++
+            else preCacheMisses++
+            if (cx === x && cz === z) {
+              preTargetConvert += ce - cs
+            } else {
+              preNeighborConvert += ce - cs
+              preNeighborCount++
+            }
+            return conv
+          })
+
+          const {
+            invisibleBlocks,
+            transparentBlocks,
+            noAoBlocks,
+            cullIdenticalBlocks,
+            occludingBlocks,
+          } = conversions[0]
+
+          if (chunkCount === 1 || !(wasm as any).generate_geometry_multi) {
+            const { blockStates, blockLight, skyLight, biomesArray } = conversions[0]
+            t1 = performance.now()
+            wasmResult = wasm.generate_geometry(
+              x, worldMinY, z, columnHeight,
+              worldMinY, worldMaxY,
+              worldMinY,
+              blockStates, blockLight, skyLight, biomesArray,
+              invisibleBlocks, transparentBlocks, noAoBlocks, cullIdenticalBlocks, occludingBlocks,
+              config?.enableLighting !== false,
+              config?.smoothLighting !== false,
+              config?.skyLight || 15
+            )
+          } else {
+            const tBuildStart = performance.now()
+            const perChunkLen = conversions[0].blockStates.length
+            const xs = new Int32Array(chunkCount)
+            const zs = new Int32Array(chunkCount)
+            const blockStatesAll = new Uint16Array(perChunkLen * chunkCount)
+            const blockLightAll = new Uint8Array(perChunkLen * chunkCount)
+            const skyLightAll = new Uint8Array(perChunkLen * chunkCount)
+            const biomesAll = new Uint8Array(perChunkLen * chunkCount)
+
+            for (let i = 0; i < chunkCount; i++) {
+              const c = conversions[i]
+              xs[i] = chunksToUse[i].x
+              zs[i] = chunksToUse[i].z
+              blockStatesAll.set(c.blockStates, perChunkLen * i)
+              blockLightAll.set(c.blockLight, perChunkLen * i)
+              skyLightAll.set(c.skyLight, perChunkLen * i)
+              biomesAll.set(c.biomesArray, perChunkLen * i)
+            }
+            preTypedArrayBuild = performance.now() - tBuildStart
+
+            t1 = performance.now()
+            wasmResult = (wasm as any).generate_geometry_multi(
+              x, worldMinY, z, columnHeight,
+              worldMinY, worldMaxY,
+              worldMinY,
+              xs, zs,
+              blockStatesAll, blockLightAll, skyLightAll, biomesAll,
+              invisibleBlocks, transparentBlocks, noAoBlocks, cullIdenticalBlocks, occludingBlocks,
+              config?.enableLighting !== false,
+              config?.smoothLighting !== false,
+              config?.skyLight || 15
+            )
+          }
         }
 
         const t2 = performance.now()
@@ -907,8 +1033,10 @@ function processColumnTick() {
           postMessage({ type: 'heightmap', key: fallback.key, heightmap: fallback.heightmap }, [fallback.heightmap.buffer])
         }
 
-        prePhase = t1 - t0
-        wasmPhase = t2 - t1
+        if (!usedFusedPath) {
+          prePhase = t1 - t0
+          wasmPhase = t2 - t1
+        }
         preOther = Math.max(0, prePhase - (preTargetConvert + preNeighborConvert + preTypedArrayBuild))
         // NOTE: `postPhase` and `processTime` are finalized AFTER the
         // per-section emit loop below — see the `Finalize column phase

@@ -402,6 +402,70 @@ pub fn parse_chunk_dump_1_18_full_column(
     }
 }
 
+/// Fused parse+mesh for 1.18+ `map_chunk` wire format.
+///
+/// Parses the raw packet inside Rust, meshes immediately, and returns ONLY the
+/// final `GeometryOutput` — no intermediate typed arrays are materialised on the
+/// JS heap.  This halves the number of JS<->WASM boundary crossings per column
+/// and removes the largest per-column allocations (Uint16Array block_states +
+/// three Uint8Arrays for biomes/light).
+///
+/// `raw_packet` is the buffer captured from `bot._client.on('raw.map_chunk', ...)`;
+/// it includes the leading packet-id varint (we skip it).
+#[wasm_bindgen(js_name = generateGeometryFromMapChunkV18Plus)]
+pub fn generate_geometry_from_map_chunk_v18plus(
+    raw_packet: &[u8],
+    num_sections: u32,
+    max_bits_per_block: u8,
+    max_bits_per_biome: u8,
+    protocol: i32,
+    // --- mesh config (same as generate_geometry) ---
+    section_x: i32,
+    section_y: i32,
+    section_z: i32,
+    section_height: i32,
+    world_min_y: i32,
+    world_max_y: i32,
+    section_data_start_y: i32,
+    invisible_blocks: &[u16],
+    transparent_blocks: &[u16],
+    no_ao_blocks: &[u16],
+    cull_identical_blocks: &[u16],
+    occluding_blocks: &[u16],
+    enable_lighting: bool,
+    smooth_lighting: bool,
+    sky_light_value: u8,
+) -> JsValue {
+    let flags = parser_v18plus::McVersionFlags::for_protocol(protocol);
+    let parsed = match parser_v18plus::parse_map_chunk_v18plus(
+        raw_packet, num_sections as usize, max_bits_per_block, max_bits_per_biome, flags,
+    ) {
+        Ok(r) => r,
+        Err(e) => wasm_bindgen::throw_str(&format!("generateGeometryFromMapChunkV18Plus: parse error: {}", e)),
+    };
+
+    let mesher = Mesher::new(
+        section_x, section_y, section_z,
+        section_height, section_data_start_y,
+        world_min_y, world_max_y,
+        enable_lighting, smooth_lighting, sky_light_value,
+    );
+
+    let result = mesher.generate(
+        &parsed.block_states,
+        &parsed.block_light,
+        &parsed.sky_light,
+        &parsed.biomes,
+        invisible_blocks,
+        transparent_blocks,
+        no_ao_blocks,
+        cull_identical_blocks,
+        occluding_blocks,
+    );
+
+    serde_wasm_bindgen::to_value(&result).expect("Failed to serialize geometry output to JS value")
+}
+
 /// Stage-3 entry: parse a raw `map_chunk` packet (1.18+) into the same shape as
 /// `parseChunkDump118FullColumnAll` so the worker can drop it straight into
 /// `generate_geometry`.
@@ -509,6 +573,94 @@ pub fn parse_chunk_sections_v16_v17_js(
     js_sys::Reflect::set(&obj, &JsValue::from_str("bytesTotal"),
         &JsValue::from_f64(result.bytes_total as f64)).unwrap();
     obj.into()
+}
+
+/// Fused parse+mesh for 1.16 / 1.17 chunk sections.
+///
+/// Parses `chunk_data` (the raw section bytes from a `map_chunk` packet) inside
+/// Rust and meshes immediately, returning only `GeometryOutput`.  Block states
+/// and biomes never leave WASM memory.
+///
+/// Light arrays (`sky_light` / `block_light`) come from a pre-parsed
+/// `update_light` packet and are passed by reference (the JS-side update-light
+/// cache already holds them as `Uint8Array`).  When light is absent the
+/// function fills defaults (sky=15, block=0) internally.
+#[wasm_bindgen(js_name = generateGeometryFromParsedV16V17)]
+pub fn generate_geometry_from_parsed_v16_v17(
+    chunk_data: &[u8],
+    bit_map_lo_hi: &[u32],
+    num_sections: u32,
+    max_bits_per_block: u8,
+    biomes_cells: &[i32],
+    default_biome: u8,
+    sky_light: &[u8],
+    block_light: &[u8],
+    // --- mesh config (same as generate_geometry) ---
+    section_x: i32,
+    section_y: i32,
+    section_z: i32,
+    section_height: i32,
+    world_min_y: i32,
+    world_max_y: i32,
+    section_data_start_y: i32,
+    invisible_blocks: &[u16],
+    transparent_blocks: &[u16],
+    no_ao_blocks: &[u16],
+    cull_identical_blocks: &[u16],
+    occluding_blocks: &[u16],
+    enable_lighting: bool,
+    smooth_lighting: bool,
+    sky_light_value: u8,
+) -> JsValue {
+    let cells_opt: Option<&[i32]> = if biomes_cells.is_empty() { None } else { Some(biomes_cells) };
+    let parsed = match parser_v16_v17::parse_chunk_sections_v16_v17(
+        chunk_data,
+        bit_map_lo_hi,
+        num_sections as usize,
+        max_bits_per_block,
+        cells_opt,
+        default_biome,
+    ) {
+        Ok(r) => r,
+        Err(e) => wasm_bindgen::throw_str(&format!("generateGeometryFromParsedV16V17: parse error: {}", e)),
+    };
+
+    let total_blocks = parsed.block_states.len();
+    let sky_fill: Vec<u8>;
+    let block_fill: Vec<u8>;
+    let sky_ref: &[u8] = if sky_light.len() == total_blocks {
+        sky_light
+    } else {
+        sky_fill = vec![15u8; total_blocks];
+        &sky_fill
+    };
+    let block_ref: &[u8] = if block_light.len() == total_blocks {
+        block_light
+    } else {
+        block_fill = vec![0u8; total_blocks];
+        &block_fill
+    };
+
+    let mesher = Mesher::new(
+        section_x, section_y, section_z,
+        section_height, section_data_start_y,
+        world_min_y, world_max_y,
+        enable_lighting, smooth_lighting, sky_light_value,
+    );
+
+    let result = mesher.generate(
+        &parsed.block_states,
+        block_ref,
+        sky_ref,
+        &parsed.biomes,
+        invisible_blocks,
+        transparent_blocks,
+        no_ao_blocks,
+        cull_identical_blocks,
+        occluding_blocks,
+    );
+
+    serde_wasm_bindgen::to_value(&result).expect("Failed to serialize geometry output to JS value")
 }
 
 /// Parse a raw 1.17 `update_light` packet (as captured by

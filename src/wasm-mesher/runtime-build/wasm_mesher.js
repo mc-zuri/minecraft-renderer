@@ -279,6 +279,117 @@ export function generateGeometryFromDump118(section_x, section_y, section_z, sec
 }
 
 /**
+ * Fused parse+mesh for 1.18+ `map_chunk` wire format.
+ *
+ * Parses the raw packet inside Rust, meshes immediately, and returns ONLY the
+ * final `GeometryOutput` — no intermediate typed arrays are materialised on the
+ * JS heap.  This halves the number of JS<->WASM boundary crossings per column
+ * and removes the largest per-column allocations (Uint16Array block_states +
+ * three Uint8Arrays for biomes/light).
+ *
+ * `raw_packet` is the buffer captured from `bot._client.on('raw.map_chunk', ...)`;
+ * it includes the leading packet-id varint (we skip it).
+ * @param {Uint8Array} raw_packet
+ * @param {number} num_sections
+ * @param {number} max_bits_per_block
+ * @param {number} max_bits_per_biome
+ * @param {number} protocol
+ * @param {number} section_x
+ * @param {number} section_y
+ * @param {number} section_z
+ * @param {number} section_height
+ * @param {number} world_min_y
+ * @param {number} world_max_y
+ * @param {number} section_data_start_y
+ * @param {Uint16Array} invisible_blocks
+ * @param {Uint16Array} transparent_blocks
+ * @param {Uint16Array} no_ao_blocks
+ * @param {Uint16Array} cull_identical_blocks
+ * @param {Uint16Array} occluding_blocks
+ * @param {boolean} enable_lighting
+ * @param {boolean} smooth_lighting
+ * @param {number} sky_light_value
+ * @returns {any}
+ */
+export function generateGeometryFromMapChunkV18Plus(raw_packet, num_sections, max_bits_per_block, max_bits_per_biome, protocol, section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, invisible_blocks, transparent_blocks, no_ao_blocks, cull_identical_blocks, occluding_blocks, enable_lighting, smooth_lighting, sky_light_value) {
+    const ptr0 = passArray8ToWasm0(raw_packet, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray16ToWasm0(invisible_blocks, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray16ToWasm0(transparent_blocks, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray16ToWasm0(no_ao_blocks, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArray16ToWasm0(cull_identical_blocks, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArray16ToWasm0(occluding_blocks, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ret = wasm.generateGeometryFromMapChunkV18Plus(ptr0, len0, num_sections, max_bits_per_block, max_bits_per_biome, protocol, section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, enable_lighting, smooth_lighting, sky_light_value);
+    return ret;
+}
+
+/**
+ * Fused parse+mesh for 1.16 / 1.17 chunk sections.
+ *
+ * Parses `chunk_data` (the raw section bytes from a `map_chunk` packet) inside
+ * Rust and meshes immediately, returning only `GeometryOutput`.  Block states
+ * and biomes never leave WASM memory.
+ *
+ * Light arrays (`sky_light` / `block_light`) come from a pre-parsed
+ * `update_light` packet and are passed by reference (the JS-side update-light
+ * cache already holds them as `Uint8Array`).  When light is absent the
+ * function fills defaults (sky=15, block=0) internally.
+ * @param {Uint8Array} chunk_data
+ * @param {Uint32Array} bit_map_lo_hi
+ * @param {number} num_sections
+ * @param {number} max_bits_per_block
+ * @param {Int32Array} biomes_cells
+ * @param {number} default_biome
+ * @param {Uint8Array} sky_light
+ * @param {Uint8Array} block_light
+ * @param {number} section_x
+ * @param {number} section_y
+ * @param {number} section_z
+ * @param {number} section_height
+ * @param {number} world_min_y
+ * @param {number} world_max_y
+ * @param {number} section_data_start_y
+ * @param {Uint16Array} invisible_blocks
+ * @param {Uint16Array} transparent_blocks
+ * @param {Uint16Array} no_ao_blocks
+ * @param {Uint16Array} cull_identical_blocks
+ * @param {Uint16Array} occluding_blocks
+ * @param {boolean} enable_lighting
+ * @param {boolean} smooth_lighting
+ * @param {number} sky_light_value
+ * @returns {any}
+ */
+export function generateGeometryFromParsedV16V17(chunk_data, bit_map_lo_hi, num_sections, max_bits_per_block, biomes_cells, default_biome, sky_light, block_light, section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, invisible_blocks, transparent_blocks, no_ao_blocks, cull_identical_blocks, occluding_blocks, enable_lighting, smooth_lighting, sky_light_value) {
+    const ptr0 = passArray8ToWasm0(chunk_data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray32ToWasm0(bit_map_lo_hi, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray32ToWasm0(biomes_cells, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray8ToWasm0(sky_light, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArray8ToWasm0(block_light, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArray16ToWasm0(invisible_blocks, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ptr6 = passArray16ToWasm0(transparent_blocks, wasm.__wbindgen_malloc);
+    const len6 = WASM_VECTOR_LEN;
+    const ptr7 = passArray16ToWasm0(no_ao_blocks, wasm.__wbindgen_malloc);
+    const len7 = WASM_VECTOR_LEN;
+    const ptr8 = passArray16ToWasm0(cull_identical_blocks, wasm.__wbindgen_malloc);
+    const len8 = WASM_VECTOR_LEN;
+    const ptr9 = passArray16ToWasm0(occluding_blocks, wasm.__wbindgen_malloc);
+    const len9 = WASM_VECTOR_LEN;
+    const ret = wasm.generateGeometryFromParsedV16V17(ptr0, len0, ptr1, len1, num_sections, max_bits_per_block, ptr2, len2, default_biome, ptr3, len3, ptr4, len4, section_x, section_y, section_z, section_height, world_min_y, world_max_y, section_data_start_y, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9, enable_lighting, smooth_lighting, sky_light_value);
+    return ret;
+}
+
+/**
  * Main entry point for generating geometry
  *
  * Input: Serialized chunk data as TypedArrays
