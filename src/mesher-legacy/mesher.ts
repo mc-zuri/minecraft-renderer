@@ -214,6 +214,9 @@ setInterval(() => {
         }
       }
       const transferable = [geometry.positions?.buffer, geometry.normals?.buffer, geometry.colors?.buffer, geometry.uvs?.buffer].filter(Boolean)
+      if (geometry.wireframePositions) {
+        transferable.push(geometry.wireframePositions.buffer)
+      }
       //@ts-expect-error
       postMessage({ type: 'geometry', key, geometry, workerIndex }, transferable)
       processTime = performance.now() - start
