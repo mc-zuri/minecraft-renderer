@@ -55,7 +55,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build
+      - name: Build library
         run: pnpm build
 
       - name: Create package archive
@@ -107,9 +107,13 @@ jobs:
         working-directory: prismarine-web
         run: pnpm install --no-frozen-lockfile
 
-      - name: Build client
+      - name: Download Generated Sounds map
         working-directory: prismarine-web
-        run: pnpm build
+        run: node scripts/downloadSoundsMap.mjs
+
+      # - name: Build client
+      #   working-directory: prismarine-web
+      #   run: pnpm build
 
       - name: Install Vercel CLI
         run: npm install -g vercel
