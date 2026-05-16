@@ -107,6 +107,14 @@ function poseToEuler(pose: any, defaultValue?: THREE.Euler) {
   return defaultValue ?? new THREE.Euler()
 }
 
+const TAU_YAW = Math.PI * 2
+
+/** Prismarine yaw in radians → shortest delta from→to in (-π, π]. */
+function shortestYawRadians(fromYawRad: number, toYawRad: number): number {
+  const norm = ((toYawRad - fromYawRad) % TAU_YAW + TAU_YAW) % TAU_YAW
+  return norm > Math.PI ? norm - TAU_YAW : norm
+}
+
 function getUsernameTexture({
   username,
   nameTagBackgroundColor = 'rgba(0, 0, 0, 0.3)',
@@ -1365,17 +1373,25 @@ export class Entities {
         })
         .start()
     }
-    if (entity.yaw) {
-      const da = (entity.yaw - e.rotation.y) % (Math.PI * 2)
-      const dy = 2 * da % (Math.PI * 2) - da
+    if (typeof entity.yaw === 'number' && Number.isFinite(entity.yaw)) {
+      const dy = shortestYawRadians(e.rotation.y, entity.yaw)
       new TWEEN.Tween(e.rotation).to({ y: e.rotation.y + dy }, ANIMATION_DURATION).start()
     }
 
     if (e?.playerObject && overrides?.rotation?.head) {
       const { playerObject } = e
-      const headRotationDiff = overrides.rotation.head.y ? overrides.rotation.head.y - entity.yaw : 0
-      playerObject.skin.head.rotation.y = -headRotationDiff
-      playerObject.skin.head.rotation.x = overrides.rotation.head.x ? - overrides.rotation.head.x : 0
+      const hy = overrides.rotation.head.y
+      const headYawWorld =
+        typeof hy === 'number' && Number.isFinite(hy) ? hy : entity.yaw
+      const headYawOffset =
+        typeof headYawWorld === 'number' && typeof entity.yaw === 'number' && Number.isFinite(headYawWorld) && Number.isFinite(entity.yaw)
+          ? shortestYawRadians(entity.yaw, headYawWorld)
+          : 0
+      playerObject.skin.head.rotation.y = headYawOffset
+
+      const hp = overrides.rotation.head.x
+      playerObject.skin.head.rotation.x =
+        typeof hp === 'number' && Number.isFinite(hp) ? -hp : 0
     }
   }
 
