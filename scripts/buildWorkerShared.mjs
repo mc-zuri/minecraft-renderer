@@ -4,6 +4,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
 import { dynamicMcDataFiles } from '../src/lib/buildSharedConfig.mjs'
+import { createEsbuildDataPlugin } from './esbuildDataPlugin.mjs'
 
 const __dirname = path.dirname(fileURLToPath(new URL(import.meta.url)))
 const rootDir = path.join(__dirname, '..')
@@ -70,29 +71,6 @@ export function createMcDataPlugin(bundleMcData, rootDir) {
         }
       })
 
-      build.onResolve({
-        filter: /^esbuild-data$/,
-      }, () => {
-        return {
-          path: 'esbuild-data',
-          namespace: 'esbuild-data',
-        }
-      })
-
-      build.onLoad({
-        filter: /.*/,
-        namespace: 'esbuild-data',
-      }, () => {
-        const data = {
-          tints: 'require("minecraft-data/minecraft-data/data/pc/1.16.2/tints.json")'
-        }
-        return {
-          contents: `module.exports = {${Object.entries(data).map(([key, code]) => `${key}: ${code}`).join(', ')}}`,
-          loader: 'js',
-          resolveDir: process.cwd(),
-        }
-      })
-
       build.onEnd(({ metafile, outputFiles }) => {
         if (!metafile) return
         fs.mkdirSync(path.join(rootDir, './dist'), { recursive: true })
@@ -143,6 +121,7 @@ export function createWorkerBuildOptions({ entryPoint, bundleMcData, watch, esbu
     ...esbuildOptions,
     plugins: [
       createMcDataPlugin(BUNDLE_MC_DATA, rootDir),
+      createEsbuildDataPlugin(),
       polyfillNode(),
       ...esbuildOptions.plugins ?? [],
     ],

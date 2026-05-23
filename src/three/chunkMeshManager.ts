@@ -3,6 +3,9 @@ import * as THREE from 'three'
 import * as nbt from 'prismarine-nbt'
 import { Vec3 } from 'vec3'
 import { MesherGeometryOutput } from '../mesher-shared/shared'
+import { getShaderCubeResources } from '../wasm-mesher/bridge/shaderCubeBridge'
+import { createCubeBlockMaterial } from './shaders/cubeBlockShader'
+import { createShaderCubeMesh, disposeShaderCubeMesh } from './shaderCubeMesh'
 import { chunkPos } from '../lib/simpleUtils'
 import { renderSign } from '../sign-renderer'
 import { getMesh } from './entity/EntityMesh'
@@ -19,7 +22,9 @@ export interface ChunkMeshPool {
 }
 
 export interface SectionObject extends THREE.Group {
-  mesh?: THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>
+  mesh?: THREE.Mesh<THREE.BufferGeometry, THREE.Material>
+  /** Instanced full-cube shader mesh; coexists with the legacy `mesh` (each may be absent). */
+  shaderMesh?: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>
   tilesCount?: number
   blocksCount?: number
 
@@ -81,6 +86,8 @@ export class ChunkMeshManager {
    * section.
    */
   private readonly chunkBoxMaterial = new THREE.MeshBasicMaterial({ color: 0x00_00_00, transparent: true, opacity: 0 })
+  /** Shared across all sections — atlas/tint uniforms updated via {@link syncCubeShaderUniforms}. */
+  private cubeShaderMaterial: THREE.ShaderMaterial | null = null
 
   // Performance tracking
   private hits = 0
@@ -137,66 +144,137 @@ export class ChunkMeshManager {
     }
   }
 
+  /** True when section has legacy vertices and/or GPU shader cube instances. */
+  sectionHasRenderableContent (geometryData: MesherGeometryOutput): boolean {
+    if (geometryData.positions.length > 0) return true
+    if (!this.isShaderCubesGpuEnabled()) return false
+    return (geometryData.shaderCubes?.count ?? 0) > 0
+  }
+
+  isShaderCubesGpuEnabled (): boolean {
+    return this.worldRenderer.shaderCubeBlocksEnabled()
+  }
+
+  syncCubeShaderUniforms (): void {
+    if (!this.isShaderCubesGpuEnabled()) return
+    const mat = this.cubeShaderMaterial ?? this.getCubeShaderMaterial()
+    if (!mat) return
+    const atlas = (this.material as THREE.MeshBasicMaterial).map ?? null
+    mat.uniforms.u_atlas.value = atlas
+    const { tintPalette } = getShaderCubeResources()
+    if (!tintPalette.isReady()) {
+      tintPalette.createTexture()
+    }
+    mat.uniforms.u_tintPalette.value = tintPalette.getTexture()
+    mat.uniforms.u_debugMode.value = this.worldRenderer.worldRendererConfig.shaderCubeDebugMode ?? 0
+    mat.needsUpdate = true
+  }
+
+  private getCubeShaderMaterial (): THREE.ShaderMaterial | null {
+    if (!this.isShaderCubesGpuEnabled()) return null
+    if (!this.cubeShaderMaterial) {
+      this.cubeShaderMaterial = createCubeBlockMaterial()
+      this.syncCubeShaderUniforms()
+    }
+    return this.cubeShaderMaterial
+  }
+
   /**
    * Update or create a section with new geometry data
    */
   updateSection (sectionKey: string, geometryData: MesherGeometryOutput): SectionObject | null {
+    const hasLegacy = geometryData.positions.length > 0
+    const shaderData = geometryData.shaderCubes
+    const hasShader = this.isShaderCubesGpuEnabled() && (shaderData?.count ?? 0) > 0
+
+    if (!hasLegacy && !hasShader) {
+      this.releaseSection(sectionKey)
+      return null
+    }
+
     // Remove existing section object from scene if it exists
     let sectionObject = this.sectionObjects[sectionKey]
     if (sectionObject) {
       this.cleanupSection(sectionKey)
     }
 
-    // Get or create mesh from pool
-    let poolEntry = this.activeSections.get(sectionKey)
-    if (!poolEntry) {
-      poolEntry = this.acquireMesh()
-      if (!poolEntry) {
-        console.warn(`ChunkMeshManager: No available mesh in pool for section ${sectionKey}`)
-        return null
-      }
-
-      this.activeSections.set(sectionKey, poolEntry)
-      poolEntry.sectionKey = sectionKey
+    if (!hasLegacy) {
+      this.releasePooledMesh(sectionKey)
     }
 
-    const { mesh } = poolEntry
+    let legacyMesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material> | undefined
+    if (hasLegacy) {
+      let poolEntry = this.activeSections.get(sectionKey)
+      if (!poolEntry) {
+        poolEntry = this.acquireMesh()
+        if (!poolEntry) {
+          console.warn(`ChunkMeshManager: No available mesh in pool for section ${sectionKey}`)
+          return null
+        }
 
-    // Update geometry attributes efficiently
-    this.updateGeometryAttribute(mesh.geometry, 'position', geometryData.positions, 3)
-    this.updateGeometryAttribute(mesh.geometry, 'normal', geometryData.normals, 3)
-    this.updateGeometryAttribute(mesh.geometry, 'color', geometryData.colors, 3)
-    this.updateGeometryAttribute(mesh.geometry, 'uv', geometryData.uvs, 2)
+        this.activeSections.set(sectionKey, poolEntry)
+        poolEntry.sectionKey = sectionKey
+      }
 
-    // Use direct index assignment for better performance (like before)
-    mesh.geometry.index = new THREE.BufferAttribute(geometryData.indices as Uint32Array | Uint16Array, 1)
+      const { mesh } = poolEntry
 
-    // Set bounding box and sphere for the 16x16x16 section
-    mesh.geometry.boundingBox = new THREE.Box3(
-      new THREE.Vector3(-8, -8, -8),
-      new THREE.Vector3(8, 8, 8)
-    )
-    mesh.geometry.boundingSphere = new THREE.Sphere(
-      new THREE.Vector3(0, 0, 0),
-      Math.sqrt(3 * 8 ** 2)
-    )
+      this.updateGeometryAttribute(mesh.geometry, 'position', geometryData.positions, 3)
+      this.updateGeometryAttribute(mesh.geometry, 'normal', geometryData.normals, 3)
+      this.updateGeometryAttribute(mesh.geometry, 'color', geometryData.colors, 3)
+      this.updateGeometryAttribute(mesh.geometry, 'uv', geometryData.uvs, 2)
 
-    // Position the mesh
-    this.worldRenderer.sceneOrigin.track(mesh, { updateMatrix: true })
-    mesh.position.set(geometryData.sx, geometryData.sy, geometryData.sz)
-    mesh.updateMatrix()
-    mesh.visible = true
-    mesh.name = 'mesh'
+      mesh.geometry.index = new THREE.BufferAttribute(geometryData.indices as Uint32Array | Uint16Array, 1)
 
-    poolEntry.lastUsedTime = performance.now()
+      mesh.geometry.boundingBox = new THREE.Box3(
+        new THREE.Vector3(-8, -8, -8),
+        new THREE.Vector3(8, 8, 8)
+      )
+      mesh.geometry.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(0, 0, 0),
+        Math.sqrt(3 * 8 ** 2)
+      )
 
-    // Create or update the section object container
+      this.worldRenderer.sceneOrigin.track(mesh, { updateMatrix: true })
+      mesh.position.set(geometryData.sx, geometryData.sy, geometryData.sz)
+      mesh.updateMatrix()
+      mesh.visible = true
+      mesh.name = 'mesh'
+
+      poolEntry.lastUsedTime = performance.now()
+      legacyMesh = mesh as THREE.Mesh<THREE.BufferGeometry, THREE.Material>
+    }
+
+    const cubeMaterial = hasShader ? this.getCubeShaderMaterial() : null
+    let shaderMesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial> | undefined
+    if (hasShader && cubeMaterial && shaderData) {
+      shaderMesh = createShaderCubeMesh(shaderData, cubeMaterial)
+      this.worldRenderer.sceneOrigin.track(shaderMesh, { updateMatrix: true })
+      shaderMesh.position.set(geometryData.sx, geometryData.sy, geometryData.sz)
+      shaderMesh.updateMatrix()
+      shaderMesh.visible = true
+    }
+
     sectionObject = new THREE.Group() as SectionObject
-    sectionObject.add(mesh)
-    sectionObject.mesh = mesh as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>
+    if (legacyMesh) {
+      sectionObject.add(legacyMesh)
+      sectionObject.mesh = legacyMesh
+    }
+    if (shaderMesh) {
+      sectionObject.add(shaderMesh)
+      sectionObject.shaderMesh = shaderMesh
+      if (!sectionObject.mesh) {
+        sectionObject.mesh = shaderMesh as unknown as THREE.Mesh<THREE.BufferGeometry, THREE.Material>
+      }
+    }
 
-    // Store metadata
-    sectionObject.tilesCount = geometryData.positions.length / 3 / 4
+    let tilesCount = 0
+    if (hasLegacy) {
+      tilesCount += geometryData.positions.length / 3 / 4
+    }
+    if (hasShader && shaderData) {
+      tilesCount += shaderData.count
+    }
+    sectionObject.tilesCount = tilesCount
     sectionObject.blocksCount = geometryData.blocksCount
     sectionObject.worldX = geometryData.sx
     sectionObject.worldY = geometryData.sy
@@ -494,6 +572,10 @@ export class ChunkMeshManager {
         })
         this.disposeContainer(sectionObject.bannersContainer)
       }
+      if (sectionObject.shaderMesh) {
+        disposeShaderCubeMesh(sectionObject.shaderMesh)
+        sectionObject.shaderMesh = undefined
+      }
       // Dispose signs and heads containers
       if (sectionObject.signsContainer) {
         this.disposeContainer(sectionObject.signsContainer)
@@ -525,6 +607,19 @@ export class ChunkMeshManager {
   /**
    * Release a section and return its mesh to the pool
    */
+  private releasePooledMesh (sectionKey: string): void {
+    const poolEntry = this.activeSections.get(sectionKey)
+    if (!poolEntry) return
+
+    poolEntry.mesh.visible = false
+    poolEntry.inUse = false
+    poolEntry.sectionKey = undefined
+    poolEntry.lastUsedTime = 0
+    this.clearGeometry(poolEntry.mesh.geometry)
+    this.activeSections.delete(sectionKey)
+    this.cleanupExcessMeshes()
+  }
+
   releaseSection (sectionKey: string): boolean {
     this.cleanupSection(sectionKey)
 
@@ -690,6 +785,20 @@ export class ChunkMeshManager {
     let colorBytes = 0
     let uvBytes = 0
     let indexBytes = 0
+    let shaderInstanceBytes = 0
+
+    for (const sectionObject of Object.values(this.sectionObjects)) {
+      const geom = sectionObject.shaderMesh?.geometry
+      if (!geom) continue
+      for (const name of ['a_w0', 'a_w1', 'a_w2'] as const) {
+        const attr = geom.getAttribute(name)
+        if (attr) {
+          const bytes = attr.array.byteLength
+          shaderInstanceBytes += bytes
+          totalBytes += bytes
+        }
+      }
+    }
 
     for (const poolEntry of this.meshPool) {
       if (poolEntry.inUse && poolEntry.mesh.geometry) {
@@ -741,6 +850,7 @@ export class ChunkMeshManager {
         color: `${(colorBytes / (1024 * 1024)).toFixed(2)} MB`,
         uv: `${(uvBytes / (1024 * 1024)).toFixed(2)} MB`,
         index: `${(indexBytes / (1024 * 1024)).toFixed(2)} MB`,
+        shaderInstances: `${(shaderInstanceBytes / (1024 * 1024)).toFixed(2)} MB`,
       }
     }
   }
@@ -766,6 +876,8 @@ export class ChunkMeshManager {
     this.meshPool.length = 0
     this.activeSections.clear()
     this.chunkBoxMaterial.dispose()
+    this.cubeShaderMaterial?.dispose()
+    this.cubeShaderMaterial = null
     // Drop any pending near-first reveal state and cancel safety timers.
     this.pendingNearReveal.clear()
     for (const timer of this.nearRevealTimers.values()) clearTimeout(timer)

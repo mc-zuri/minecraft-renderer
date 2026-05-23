@@ -76,7 +76,10 @@ test('splitColumnWasmOutputToSections: per-section split is equivalent to manual
     { x: 0, y: 64, z: 0 },  // contains the isolated block at Y=64
   ]
 
-  const split = splitColumnWasmOutputToSections(fullColumn, requested, { version: VERSION })
+  const split = splitColumnWasmOutputToSections(fullColumn, requested, {
+    version: VERSION,
+    shaderCubes: false,
+  })
 
   expect(split.size).toBe(4)
   for (const r of requested) {
@@ -99,7 +102,8 @@ test('splitColumnWasmOutputToSections: per-section split is equivalent to manual
       VERSION,
       `${r.x},${r.y},${r.z}`,
       { x: r.x + 8, y: r.y + 8, z: r.z + 8 },
-      undefined
+      undefined,
+      { shaderCubes: false },
     )
     const got = split.get(`${r.x},${r.y},${r.z}`)!.exported
     expect(got.key).toBe(reference.key)
@@ -142,7 +146,10 @@ test('splitColumnWasmOutputToSections: per-section split is equivalent to manual
 
 test('splitColumnWasmOutputToSections: empty requested-keys list returns empty map', () => {
   const fullColumn = makeSeamFixture()
-  const out = splitColumnWasmOutputToSections(fullColumn, [], { version: VERSION })
+  const out = splitColumnWasmOutputToSections(fullColumn, [], {
+    version: VERSION,
+    shaderCubes: false,
+  })
   expect(out.size).toBe(0)
 })
 
@@ -153,7 +160,7 @@ test('splitColumnWasmOutputToSections: blocks outside requested sections are dro
   const out = splitColumnWasmOutputToSections(
     fullColumn,
     [{ x: 0, y: 32, z: 0 }],
-    { version: VERSION }
+    { version: VERSION, shaderCubes: false },
   )
   const empty = out.get('0,32,0')!
   expect(empty.exported.geometry.positions).toEqual([])

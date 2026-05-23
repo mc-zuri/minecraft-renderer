@@ -1223,7 +1223,12 @@ function processColumnTick() {
         exportedMap = splitColumnWasmOutputToSections(
           wasmResult,
           requestedSectionKeys,
-          { version, world, sectionHeight }
+          {
+            version,
+            world,
+            sectionHeight,
+            shaderCubes: config?.shaderCubeBlocks === true,
+          },
         )
 
         // Push heightmap from the WASM column output. With column meshing as
@@ -1300,7 +1305,9 @@ function processColumnTick() {
 
         let geometry: MesherGeometryOutput
         let transferable: any[] = []
-        if (exported && exported.geometry.indices.length > 0) {
+        const hasLegacyMesh = (exported?.geometry.indices.length ?? 0) > 0
+        const hasShaderCubes = (exported?.shaderCubes?.count ?? 0) > 0
+        if (exported && (hasLegacyMesh || hasShaderCubes)) {
           const maxIndex = exported.geometry.indices.length > 0
             ? Math.max(...exported.geometry.indices)
             : 0
@@ -1338,6 +1345,13 @@ function processColumnTick() {
             // section's geometry.
             blocksCount: sectionBlocksCount,
           }
+          if (exported.shaderCubes) {
+            geometry.shaderCubes = {
+              words: new Uint32Array(exported.shaderCubes.words),
+              count: exported.shaderCubes.count,
+              formatVersion: 1,
+            }
+          }
           transferable = [
             geometry.positions?.buffer,
             geometry.normals?.buffer,
@@ -1345,6 +1359,7 @@ function processColumnTick() {
             geometry.uvs?.buffer,
             //@ts-ignore
             geometry.indices?.buffer,
+            geometry.shaderCubes?.words?.buffer,
           ].filter(Boolean)
 
           if (exported.geometry.indices.length > 0 && config.computeWireframeEdges) {

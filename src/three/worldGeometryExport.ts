@@ -1,5 +1,8 @@
 import * as THREE from 'three'
 import type { WorldRendererThree } from './worldRendererThree'
+import { getShaderCubeResources } from '../wasm-mesher/bridge/shaderCubeBridge'
+import { createCubeBlockMaterial } from './shaders/cubeBlockShader'
+import { createShaderCubeMesh } from './shaderCubeMesh'
 
 const GEOMETRY_EXPORT_GROUP_NAME = 'geometry-export-root'
 
@@ -24,6 +27,11 @@ export interface ExportedSection {
     colors: number[]
     uvs: number[]
     indices: number[]
+  }
+  shaderCubes?: {
+    words: Uint32Array
+    count: number
+    formatVersion: 1
   }
 }
 
@@ -134,40 +142,62 @@ export async function loadWorldGeometryFromUrl(url: string): Promise<ExportedWor
  * Recreate THREE.js meshes from exported geometry
  * Returns an array of mesh groups that can be added to a scene
  */
+function shaderMaterialForExport(legacyMaterial: THREE.Material): THREE.ShaderMaterial | null {
+  const atlas = (legacyMaterial as THREE.MeshBasicMaterial).map
+    ?? (legacyMaterial as THREE.MeshLambertMaterial).map
+  if (!atlas) return null
+  const shaderMat = createCubeBlockMaterial()
+  shaderMat.uniforms.u_atlas.value = atlas
+  const { tintPalette } = getShaderCubeResources()
+  if (!tintPalette.isReady()) tintPalette.createTexture()
+  shaderMat.uniforms.u_tintPalette.value = tintPalette.getTexture()
+  return shaderMat
+}
+
 export function createMeshesFromExport(
   exportData: ExportedWorldGeometry,
-  material: THREE.Material
+  material: THREE.Material,
+  shaderMaterial?: THREE.ShaderMaterial | null,
 ): THREE.Group[] {
   const groups: THREE.Group[] = []
+  const resolvedShaderMat = shaderMaterial ?? shaderMaterialForExport(material)
 
   for (const section of exportData.sections) {
-    const geometry = new THREE.BufferGeometry()
-
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(section.geometry.positions, 3))
-    if (section.geometry.normals.length) {
-      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(section.geometry.normals, 3))
-    }
-    if (section.geometry.colors.length) {
-      geometry.setAttribute('color', new THREE.Float32BufferAttribute(section.geometry.colors, 3))
-    }
-    if (section.geometry.uvs.length) {
-      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(section.geometry.uvs, 2))
-    }
-
-    // Use appropriate index type based on vertex count
-    const maxIndex = Math.max(...section.geometry.indices)
-    const IndexArrayType = maxIndex > 65_535 ? Uint32Array : Uint16Array
-    geometry.setIndex(new THREE.BufferAttribute(new IndexArrayType(section.geometry.indices), 1))
-
-    const mesh = new THREE.Mesh(geometry, material)
-    mesh.position.set(section.position.x, section.position.y, section.position.z)
-    mesh.name = 'mesh'
-
     const group = new THREE.Group()
     group.name = 'chunk'
-    group.add(mesh)
 
-    groups.push(group)
+    const hasLegacy = section.geometry.positions.length > 0 && section.geometry.indices.length > 0
+    if (hasLegacy) {
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(section.geometry.positions, 3))
+      if (section.geometry.normals.length) {
+        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(section.geometry.normals, 3))
+      }
+      if (section.geometry.colors.length) {
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(section.geometry.colors, 3))
+      }
+      if (section.geometry.uvs.length) {
+        geometry.setAttribute('uv', new THREE.Float32BufferAttribute(section.geometry.uvs, 2))
+      }
+      const maxIndex = Math.max(...section.geometry.indices)
+      const IndexArrayType = maxIndex > 65_535 ? Uint32Array : Uint16Array
+      geometry.setIndex(new THREE.BufferAttribute(new IndexArrayType(section.geometry.indices), 1))
+      const mesh = new THREE.Mesh(geometry, material)
+      mesh.position.set(section.position.x, section.position.y, section.position.z)
+      mesh.name = 'mesh'
+      group.add(mesh)
+    }
+
+    const shaderCubes = section.shaderCubes
+    if (shaderCubes && shaderCubes.count > 0 && resolvedShaderMat) {
+      const shaderMesh = createShaderCubeMesh(shaderCubes, resolvedShaderMat)
+      shaderMesh.position.set(section.position.x, section.position.y, section.position.z)
+      group.add(shaderMesh)
+    }
+
+    if (group.children.length > 0) {
+      groups.push(group)
+    }
   }
 
   return groups
@@ -242,7 +272,10 @@ export async function applyWorldGeometryExport(
     material = rendererMaterial
   }
 
-  const groups = createMeshesFromExport(exportData, material)
+  const shaderMat = exportData.sections.some(s => (s.shaderCubes?.count ?? 0) > 0)
+    ? shaderMaterialForExport(material)
+    : null
+  const groups = createMeshesFromExport(exportData, material, shaderMat)
   const container = new THREE.Group()
   container.name = GEOMETRY_EXPORT_GROUP_NAME
   if (hasEmbeddedTexture) {

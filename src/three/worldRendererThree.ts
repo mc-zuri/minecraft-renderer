@@ -40,6 +40,11 @@ type SectionKey = string
 
 export class WorldRendererThree extends WorldRendererCommon {
   outputFormat = 'threeJs' as const
+
+  protected override isShaderCubeBlocksEnabled(): boolean {
+    return this.worldRendererConfig.shaderCubeBlocks === true
+      && !!this.renderer?.capabilities?.isWebGL2
+  }
   chunkMeshManager: ChunkMeshManager
   get sectionObjects() {
     return this.chunkMeshManager.sectionObjects
@@ -514,6 +519,9 @@ export class WorldRendererThree extends WorldRendererCommon {
     this.onReactiveConfigUpdated('defaultSkybox', (value) => {
       this.skyboxRenderer.updateDefaultSkybox(value)
     })
+    this.onReactiveConfigUpdated('shaderCubeDebugMode', () => {
+      this.chunkMeshManager.syncCubeShaderUniforms()
+    })
 
     let currentHandRenderer = this.displayOptions.inWorldRenderingConfig.handRenderer
     this.onReactiveConfigUpdated('handRenderer', (value) => {
@@ -610,6 +618,7 @@ export class WorldRendererThree extends WorldRendererCommon {
     texture.needsUpdate = true
     texture.flipY = false
     this.material.map = texture
+    this.chunkMeshManager.syncCubeShaderUniforms()
 
     const itemsTexture = loadThreeJsTextureFromBitmap(resources.itemsAtlasImage!)
     itemsTexture.needsUpdate = true
@@ -809,7 +818,7 @@ export class WorldRendererThree extends WorldRendererCommon {
         continue
       }
 
-      if (!update.geometry.positions.length) {
+      if (!this.chunkMeshManager.sectionHasRenderableContent(update.geometry)) {
         this.chunkMeshManager.releaseSection(update.key)
         continue
       }
@@ -848,7 +857,7 @@ export class WorldRendererThree extends WorldRendererCommon {
         return
       }
 
-      if (!data.geometry.positions.length) {
+      if (!this.chunkMeshManager.sectionHasRenderableContent(data.geometry)) {
         this.chunkMeshManager.releaseSection(data.key)
         return
       }
@@ -959,7 +968,7 @@ export class WorldRendererThree extends WorldRendererCommon {
       .filter(obj => obj.name === 'chunk' && obj.visible)
       .filter(obj => {
         // Get the mesh child which has the actual geometry
-        const mesh = obj.children.find(child => child.name === 'mesh')
+        const mesh = obj.children.find(child => child.name === 'mesh' || child.name === 'shaderMesh')
         if (!mesh) return false
 
         // Check distance from player position to chunk
@@ -972,8 +981,10 @@ export class WorldRendererThree extends WorldRendererCommon {
     // Get all mesh children for raycasting
     const meshes: THREE.Object3D[] = []
     for (const chunk of nearbyChunks) {
-      const mesh = chunk.children.find(child => child.name === 'mesh')
-      if (mesh) meshes.push(mesh)
+      for (const name of ['mesh', 'shaderMesh'] as const) {
+        const mesh = chunk.children.find(child => child.name === name)
+        if (mesh) meshes.push(mesh)
+      }
     }
 
     const intersects = raycaster.intersectObjects(meshes, false)

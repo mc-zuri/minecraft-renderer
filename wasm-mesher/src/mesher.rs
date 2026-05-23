@@ -1,5 +1,5 @@
 use crate::chunk::{ChunkData, WorldView};
-use crate::lighting::{calculate_light, FACE_DIRS};
+use crate::lighting::{calculate_light_combined, FACE_DIRS};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -123,6 +123,11 @@ pub struct BlockFaceData {
     pub visible_faces: u8,         // Bitmask: bit 0=up, 1=down, 2=east, 3=west, 4=south, 5=north
     pub ao_data: Vec<[u8; 4]>,     // AO values for each visible face (4 corners per face)
     pub light_data: Vec<[f32; 4]>, // Light values for each visible face (4 corners per face)
+    /// Packed combined smooth light per corner (u8, 0-255).
+    /// Same avg(max(block_light, sky_light)) sampling as `light_data`, but quantized
+    /// to one u8 per corner so the shader instance buffer needs no further decoding.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub light_combined: Vec<[u8; 4]>, // Packed light for shader instanced path
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -201,6 +206,7 @@ impl Mesher {
                     let mut visible_faces = 0u8;
                     let mut ao_data = Vec::new();
                     let mut light_data = Vec::new();
+                    let mut light_combined_data = Vec::new();
 
                     for (face_idx, face_dir) in FACE_DIRS.iter().enumerate() {
                         let neighbor_x = x + face_dir[0];
@@ -231,6 +237,7 @@ impl Mesher {
                         let corners = crate::geometry::FACE_CORNERS[face_idx];
                         let mut face_ao = [0u8; 4];
                         let mut face_light = [0.0f32; 4];
+                        let mut face_light_combined = [0u8; 4];
 
                         for (corner_idx, corner) in corners.iter().enumerate() {
                             let corner_offset = [corner[0] * 2 - 1, corner[1] * 2 - 1, corner[2] * 2 - 1];
@@ -249,7 +256,7 @@ impl Mesher {
 
                             // Calculate light
                             if self.enable_lighting {
-                                face_light[corner_idx] = calculate_light(
+                                let (f32_light, packed) = calculate_light_combined(
                                     &world,
                                     x,
                                     y,
@@ -259,13 +266,17 @@ impl Mesher {
                                     corner_offset,
                                     self.smooth_lighting,
                                 );
+                                face_light[corner_idx] = f32_light;
+                                face_light_combined[corner_idx] = packed;
                             } else {
                                 face_light[corner_idx] = 1.0;
+                                face_light_combined[corner_idx] = 255;
                             }
                         }
 
                         ao_data.push(face_ao);
                         light_data.push(face_light);
+                        light_combined_data.push(face_light_combined);
                     }
 
                     // Only add block if it has visible faces
@@ -277,6 +288,7 @@ impl Mesher {
                             visible_faces,
                             ao_data,
                             light_data,
+                            light_combined: light_combined_data,
                         });
                     }
                 }

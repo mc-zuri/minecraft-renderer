@@ -11,7 +11,13 @@ import { Vec3 } from 'vec3'
 import { elemFaces, buildRotationMatrix, matmul3, matmulmat3, vecadd3, vecsub3 } from '../../mesher-shared/modelsGeometryCommon'
 import type { ExportedWorldGeometry, ExportedSection } from '../../three/worldGeometryExport'
 import type { MesherGeometryOutput } from '../../mesher-shared/shared'
+import { SECTION_HEIGHT } from '../../mesher-shared/shared'
 import type { World } from '../../mesher-shared/world'
+import {
+  buildShaderCubesFromWords,
+  getShaderCubeResources,
+  tryBuildShaderCubeInstances,
+} from './shaderCubeBridge'
 
 // Handle both default and named export
 const worldBlockProvider = (worldBlockProviderModule as any).default || worldBlockProviderModule
@@ -84,6 +90,7 @@ interface WasmBlockFaceData {
   visible_faces: number
   ao_data: number[][]
   light_data: number[][]
+  light_combined?: number[][] // Packed combined light for shader path ([u8; 4] per visible face)
 }
 
 export interface WasmGeometryOutput {
@@ -411,6 +418,16 @@ const renderLiquidToGeometry = (
   }
 }
 
+export type RenderWasmOptions = {
+  /** Section height in blocks. Shader-cube path requires 16; other values keep legacy. */
+  sectionHeight?: number
+  /**
+   * Pack full-cube blocks into instanced shader words.
+   * Set false in parity tests that expect legacy vertex buffers only.
+   */
+  shaderCubes?: boolean
+}
+
 /**
  * Render WASM mesher output to Three.js geometry
  */
@@ -419,7 +436,8 @@ export function renderWasmOutputToGeometry(
   version: string,
   sectionKey: string,
   sectionPosition: { x: number, y: number, z: number },
-  world?: World
+  world?: World,
+  options?: RenderWasmOptions,
 ): ExportedSection {
   const DEBUG = false
   const log = (...args) => {
@@ -461,6 +479,12 @@ export function renderWasmOutputToGeometry(
   }> = []
 
   let currentIndex = 0
+
+  const sectionHeight = options?.sectionHeight ?? SECTION_HEIGHT
+  const shaderCubesEnabled = options?.shaderCubes !== false
+  const [sectionOx, sectionOy, sectionOz] = sectionKey.split(',').map((v) => parseInt(v, 10))
+  const shaderWordBuffer: number[] = []
+  const shaderResources = shaderCubesEnabled ? getShaderCubeResources() : null
 
   for (const block of wasmOutput.blocks) {
     const [bx, by, bz] = block.position
@@ -507,186 +531,32 @@ export function renderWasmOutputToGeometry(
     const cachedModel = getCachedBlockModel(blockStateId, version, blockProvider, PrismarineBlock)
     if (!cachedModel) continue
 
-    if (false) {
-      // For now, use first model variant (can be extended later)
-      const modelVariant = cachedModel!.modelVariants[0]
-      if (!modelVariant) continue
-
-      const { model, globalMatrix, globalShift, elements } = modelVariant
-
-      // Get biome for tint calculation if world is provided
-      let biome: string | undefined
-      if (world) {
-        const blockObj = world!.getBlock(new Vec3(bx, by, bz))
-        biome = blockObj?.biome?.name
-      }
-
-      // Process faces in the same order as TypeScript (iterate through model's faces)
-      // TypeScript uses: for (const face in element.faces)
-      // We need to match this order to get the same vertex ordering
-
-      // Find the element that contains faces (use cached element data)
-      const faceElements = elements.filter(elemData => elemData.element.faces && Object.keys(elemData.element.faces).length > 0)
-
-      if (faceElements.length === 0) continue
-
-      // Map face names to their index in WASM output
-      const faceNameToIndex: Record<string, number> = {
-        'up': 0,
-        'down': 1,
-        'east': 2,
-        'west': 3,
-        'south': 4,
-        'north': 5
-      }
-
-      // WASM processes faces in fixed order: [up, down, east, west, south, north]
-      // Build a mapping from WASM face order to data index
-      const wasmFaceOrder = ['up', 'down', 'east', 'west', 'south', 'north']
-      const wasmFaceToDataIndex: Record<string, number> = {}
-      let dataIndex = 0
-      for (const faceName of wasmFaceOrder) {
-        const faceIdx = faceNameToIndex[faceName]
-        if ((block.visible_faces & (1 << faceIdx)) !== 0) {
-          wasmFaceToDataIndex[faceName] = dataIndex++
-        }
-      }
-
-      // Process faces in the order they appear in the model (matching TS)
-      for (const elemData of faceElements) {
-        const element = elemData.element
-        const localMatrix = elemData.localMatrix
-        const localShift = elemData.localShift
-
-        // eslint-disable-next-line guard-for-in
-        for (const faceName in element.faces) {
-          const faceIdx = faceNameToIndex[faceName]
-          if (faceIdx === undefined) continue
-
-          // Check if this face is visible in WASM output
-          if ((block.visible_faces & (1 << faceIdx)) === 0) {
-            continue
-          }
-
-          const matchingEFace = element.faces[faceName]
-          const { dir, corners, mask1, mask2 } = elemFaces[faceName]
-
-          // Get the correct data index for this face based on WASM's processing order
-          const faceDataIndex = wasmFaceToDataIndex[faceName]
-          if (faceDataIndex === undefined) continue
-
-          const aoValues = block.ao_data[faceDataIndex]
-          const lightValues = block.light_data[faceDataIndex]
-
-          log(`[WASM]   Face ${faceIdx} (${faceName}): dir=[${dir.join(',')}], ao=[${aoValues.join(',')}], light=[${lightValues.map(l => l.toFixed(3)).join(',')}]`)
-
-          const texture = matchingEFace.texture as any
-          const u = texture.u || 0
-          const v = texture.v || 0
-          const su = texture.su || 1
-          const sv = texture.sv || 1
-
-          // UV rotation (matching reference implementation)
-          let r = matchingEFace.rotation || 0
-          if (faceName === 'down') {
-            r += 180
-          }
-          const uvcs = Math.cos(r * Math.PI / 180)
-          const uvsn = -Math.sin(r * Math.PI / 180)
-
-          // Get tint (use cached model data and world if available)
-          const tint = getTint(matchingEFace, cachedModel!.blockName, cachedModel!.blockProps, biome, world)
-
-          const minx = element.from[0]
-          const miny = element.from[1]
-          const minz = element.from[2]
-          const maxx = element.to[0]
-          const maxy = element.to[1]
-          const maxz = element.to[2]
-
-          // Calculate transformed direction
-          const transformedDir = matmul3(globalMatrix, dir)
-
-          // Add 4 vertices for this face
-          const baseIndex = currentIndex
-          for (let cornerIdx = 0; cornerIdx < 4; cornerIdx++) {
-            const pos = corners[cornerIdx]
-
-            // Calculate vertex position (matching reference)
-            let vertex = [
-              (pos[0] ? maxx : minx),
-              (pos[1] ? maxy : miny),
-              (pos[2] ? maxz : minz)
-            ]
-
-            // Apply element rotation
-            vertex = vecadd3(matmul3(localMatrix, vertex), localShift)
-            // Apply model rotation
-            vertex = vecadd3(matmul3(globalMatrix, vertex), globalShift)
-            // Convert to block coordinates (0-1)
-            vertex = vertex.map(v => v / 16)
-
-            // World position (relative to section)
-            const worldPos = [
-              vertex[0] + (bx & 15) - 8,
-              vertex[1] + (by & 15) - 8,
-              vertex[2] + (bz & 15) - 8
-            ]
-
-            log(`[WASM]     Corner ${cornerIdx}: corner=[${pos.join(',')}], vertex=[${vertex.map(v => v.toFixed(3)).join(',')}], worldPos=[${worldPos.map(v => v.toFixed(3)).join(',')}]`)
-
-            positions.push(...worldPos)
-
-            // Normal (transformed direction)
-            normals.push(transformedDir[0], transformedDir[1], transformedDir[2])
-
-            // Color (with AO and light from WASM) - matching TS formula exactly
-            const ao = aoValues[cornerIdx]
-
-            // TS calculation:
-            // baseLight = world.getLight(neighborPos, ...) / 15  (0-1 range)
-            // cornerLightResult = baseLight * 15  (0-15 range, or interpolated if smooth lighting)
-            // light = (ao + 1) / 4 * (cornerLightResult / 15)
-            // finalColor = baseLight * tint * light
-
-            // WASM provides lightValues in 0-1 range (already divided by 15)
-            // But WASM light calculation seems to return 0.0, so we need to handle that
-            // In the test case, TypeScript gets baseLight = 1.0 (full brightness)
-            // So we should use 1.0 as the base light value when WASM returns 0
-            const baseLight = lightValues[cornerIdx]
-            const cornerLightResult = baseLight * 15
-
-            const light = (ao + 1) / 4 * (cornerLightResult / 15)
-
-            colors.push(tint[0] * light, tint[1] * light, tint[2] * light)
-
-            // UV calculation (matching reference exactly)
-            const baseu = (pos[3] - 0.5) * uvcs - (pos[4] - 0.5) * uvsn + 0.5
-            const basev = (pos[3] - 0.5) * uvsn + (pos[4] - 0.5) * uvcs + 0.5
-            const finalU = baseu * su + u
-            const finalV = basev * sv + v
-            log(`[WASM]       UV: cornerUV=[${pos[3]},${pos[4]}], baseUV=[${baseu.toFixed(6)},${basev.toFixed(6)}], finalUV=[${finalU.toFixed(6)},${finalV.toFixed(6)}], texture=[u=${u},v=${v},su=${su},sv=${sv}], rotation=${r}`)
-            uvs.push(finalU, finalV)
-
-            currentIndex++
-          }
-
-          // Add indices (2 triangles) - matching TS AO-optimized winding
-          // TS uses: if (doAO && aos[0] + aos[3] >= aos[1] + aos[2]) { optimized } else { standard }
-          let tri1: number[], tri2: number[]
-          if (aoValues[0] + aoValues[3] >= aoValues[1] + aoValues[2]) {
-            // AO-optimized winding
-            tri1 = [baseIndex, baseIndex + 3, baseIndex + 2]
-            tri2 = [baseIndex, baseIndex + 1, baseIndex + 3]
-            log(`[WASM]     Indices (AO optimized): tri1=[${tri1.join(',')}], tri2=[${tri2.join(',')}], aos=[${aoValues.join(',')}]`)
-          } else {
-            // Standard winding
-            tri1 = [baseIndex, baseIndex + 1, baseIndex + 2]
-            tri2 = [baseIndex + 2, baseIndex + 1, baseIndex + 3]
-            log(`[WASM]     Indices (standard): tri1=[${tri1.join(',')}], tri2=[${tri2.join(',')}], aos=[${aoValues.join(',')}]`)
-          }
-          indices.push(...tri1, ...tri2)
-        }
+    if (shaderResources) {
+      const modelVars = cachedModel.models[0]
+      const model = modelVars?.[0]
+      const element = model?.elements?.[0]
+      if (model && element) {
+        const doAO = (model as { ao?: boolean }).ao ?? cachedModel.boundingBox !== 'empty'
+        const emitted = tryBuildShaderCubeInstances(
+          block,
+          {
+            blockName: cachedModel.blockName,
+            blockProps: cachedModel.blockProps,
+            isCube: cachedModel.isCube,
+            model,
+          },
+          model,
+          {
+            sectionOrigin: { x: sectionOx, y: sectionOy, z: sectionOz },
+            sectionHeight,
+            biome,
+            tintPalette: shaderResources.tintPalette,
+            textureIndexMapping: shaderResources.textureIndexMapping,
+            doAO,
+          },
+          shaderWordBuffer,
+        )
+        if (emitted) continue
       }
     }
 
@@ -961,7 +831,9 @@ export function renderWasmOutputToGeometry(
     }
   }
 
-  const result = {
+  const shaderCubes = buildShaderCubesFromWords(shaderWordBuffer)
+
+  const result: ExportedSection = {
     key: sectionKey,
     position: sectionPosition,
     geometry: {
@@ -971,6 +843,7 @@ export function renderWasmOutputToGeometry(
       uvs,
       indices,
     },
+    ...(shaderCubes ? { shaderCubes } : {}),
   }
 
   log(`[WASM] Final geometry summary:`)
@@ -1018,10 +891,10 @@ export function renderWasmOutputToGeometry(
 export function splitColumnWasmOutputToSections(
   fullColumnOutput: WasmGeometryOutput,
   requestedSectionKeys: Array<{ x: number, y: number, z: number }>,
-  ctx: { version: string, world?: World, sectionHeight?: number }
+  ctx: { version: string, world?: World, sectionHeight?: number, shaderCubes?: boolean }
 ): Map<string, { exported: ExportedSection, blocksCount: number }> {
   const { version, world } = ctx
-  const sectionHeight = ctx.sectionHeight ?? 16
+  const sectionHeight = ctx.sectionHeight ?? SECTION_HEIGHT
 
   // Bucket blocks by section Y once, so we don't re-scan the full column
   // for every requested section. Bucket key = section-relative chunk Y
@@ -1060,7 +933,8 @@ export function splitColumnWasmOutputToSections(
       version,
       sectionKey,
       sectionPosition,
-      world
+      world,
+      { sectionHeight, shaderCubes: ctx.shaderCubes },
     )
     out.set(sectionKey, { exported, blocksCount: sectionBlocks.length })
   }
@@ -1080,7 +954,9 @@ export function wasmOutputToExportFormat(
   cameraRotation = { pitch: 0, yaw: 0 },
   world?: World
 ): ExportedWorldGeometry {
-  const section = renderWasmOutputToGeometry(wasmOutput, version, sectionKey, sectionPosition, world)
+  const section = renderWasmOutputToGeometry(wasmOutput, version, sectionKey, sectionPosition, world, {
+    shaderCubes: true,
+  })
 
   return {
     version,

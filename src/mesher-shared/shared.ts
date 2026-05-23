@@ -19,6 +19,8 @@ export const defaultMesherConfig = {
   disableBlockEntityTextures: false,
   disableConversionCache: false,
   computeWireframeEdges: false,
+  /** Pack eligible full-cube faces as GPU-instanced shader words during WASM post-processing. */
+  shaderCubeBlocks: false,
 }
 
 export type CustomBlockModels = {
@@ -62,6 +64,12 @@ export type MesherGeometryOutput = {
   blocksCount: number
   wireframePositions?: Float32Array
   customBlockModels?: CustomBlockModels
+  /** GPU-instanced full-cube faces packed by the mesher; consumed by ChunkMeshManager. */
+  shaderCubes?: {
+    words: Uint32Array
+    count: number
+    formatVersion: 1
+  }
 }
 
 export interface MesherMainEvents {

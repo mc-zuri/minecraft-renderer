@@ -148,6 +148,18 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
     return false
   }
 
+  /**
+   * Effective instanced cube-shader path (config + runtime caps).
+   * WorldRendererThree adds WebGL2; worker uses {@link getMesherConfig}.shaderCubeBlocks.
+   */
+  protected isShaderCubeBlocksEnabled(): boolean {
+    return this.worldRendererConfig.shaderCubeBlocks === true
+  }
+
+  shaderCubeBlocksEnabled(): boolean {
+    return this.isShaderCubeBlocksEnabled()
+  }
+
   worldRendererConfig: WorldRendererConfig
   playerStateReactive: PlayerStateReactive
   playerStateUtils: PlayerStateUtils
@@ -628,6 +640,7 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
       worldMaxY: this.worldMinYRender + this.worldSizeParams.worldHeight,
       disableConversionCache: this.worldRendererConfig.disableMesherConversionCache,
       computeWireframeEdges: this.worldRendererConfig.futuristicReveal === true,
+      shaderCubeBlocks: this.isShaderCubeBlocksEnabled(),
     }
   }
 

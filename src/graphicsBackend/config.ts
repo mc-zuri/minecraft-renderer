@@ -25,6 +25,10 @@ export const defaultWorldRendererConfig = {
 
   // Performance settings
   wasmMesher: true,
+  /** Render full 1×1 cubes through the instanced shader path (requires WebGL2). */
+  shaderCubeBlocks: false,
+  /** 0=off, 1=holes red, 2=tileIndex, 3=faceId colors, 4=atlas alpha */
+  shaderCubeDebugMode: 0,
   mesherWorkers: 1,
   addChunksBatchWaitTime: 200,
   _experimentalSmoothChunkLoading: true,

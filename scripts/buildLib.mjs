@@ -4,6 +4,7 @@ import { polyfillNode } from 'esbuild-plugin-polyfill-node'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
+import { createEsbuildDataPlugin } from './esbuildDataPlugin.mjs'
 
 const __dirname = path.dirname(fileURLToPath(new URL(import.meta.url)))
 const rootDir = path.join(__dirname, '..')
@@ -50,6 +51,7 @@ const buildOptions = {
     'mc-assets'
   ],
   plugins: [
+    createEsbuildDataPlugin({ inlineTints: true }),
     polyfillNode({
       // Only polyfill specific modules we need
       globals: {

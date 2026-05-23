@@ -138,10 +138,18 @@ export class StarfieldModule implements RendererModuleController {
 
     const material = new StarfieldMaterial()
     material.blending = THREE.AdditiveBlending
-    material.depthTest = false
+    // depthTest=true so opaque blocks in front correctly occlude stars (was false, which
+    // made them additively visible THROUGH every opaque mesh — most visible against the
+    // new shader-cube path which renders in the opaque queue). depthWrite=false keeps
+    // stars from clobbering the depth buffer for any transparent meshes drawn after
+    // them in the same pass (clouds, foliage cutouts, particles…).
+    material.depthTest = true
+    material.depthWrite = false
     material.transparent = true
 
     this.points = new THREE.Points(geometry, material)
+    // renderOrder=-1 keeps stars at the FRONT of the transparent queue, so any
+    // transparent foreground (leaves, glass, water) still composites on top of them.
     this.points.renderOrder = -1
     this.worldRenderer.scene.add(this.points)
   }
