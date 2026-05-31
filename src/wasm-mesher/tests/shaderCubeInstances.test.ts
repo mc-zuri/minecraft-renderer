@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from 'vitest'
-import { WORD0, WORD2 } from '../../three/shaders/cubeBlockShader'
+import { WORD0, WORD2, WORD3 } from '../../three/shaders/cubeBlockShader'
 import {
   resetShaderCubeResources,
   getShaderCubeResources,
@@ -8,7 +8,14 @@ import {
   buildShaderCubesFromWords,
   countVisibleFaces,
   unpackTexIndexFromWord2,
+  decodeSectionBaseFromWords,
+  packWord3,
+  SHADER_CUBES_FORMAT_VERSION,
+  SHADER_CUBES_WORDS_PER_FACE,
 } from '../bridge/shaderCubeBridge'
+import { GlobalBlockBuffer } from '../../three/globalBlockBuffer'
+import { createCubeBlockMaterial } from '../../three/shaders/cubeBlockShader'
+import * as THREE from 'three'
 import { renderWasmOutputToGeometry } from '../bridge/render-from-wasm'
 
 const VERSION = '1.16.5'
@@ -55,7 +62,7 @@ test('packWord2: AO diagonal flip sets bit 12', () => {
     words,
   )
   expect(ok).toBe(true)
-  expect(words.length).toBe(3)
+  expect(words.length).toBe(SHADER_CUBES_WORDS_PER_FACE)
   expect(words[2]! & (1 << WORD2.DIAGONAL_FLAG_SHIFT)).not.toBe(0)
 })
 
@@ -152,12 +159,12 @@ test('renderWasmOutputToGeometry: stone emits shaderCubes and skips legacy verti
     { shaderCubes: true },
   )
   expect(out.shaderCubes?.count).toBe(6)
-  expect(out.shaderCubes?.formatVersion).toBe(1)
-  expect(out.shaderCubes?.words.length).toBe(18)
+  expect(out.shaderCubes?.formatVersion).toBe(SHADER_CUBES_FORMAT_VERSION)
+  expect(out.shaderCubes?.words.length).toBe(6 * SHADER_CUBES_WORDS_PER_FACE)
   expect(out.geometry.positions.length).toBe(0)
   expect(out.geometry.indices.length).toBe(0)
   const words = out.shaderCubes!.words
-  for (let i = 0; i < words.length; i += 3) {
+  for (let i = 0; i < words.length; i += SHADER_CUBES_WORDS_PER_FACE) {
     expect(unpackTexIndexFromWord2(words[i + 2]!)).toBe(STONE_ATLAS_TILE_INDEX)
   }
 })
@@ -295,4 +302,58 @@ test('doAO false: full bright AO/light and no diagonal flip', () => {
     expect((words[1]! >> (i * 8)) & 0xff).toBe(255)
   }
   expect(words[2]! & (1 << WORD2.DIAGONAL_FLAG_SHIFT)).toBe(0)
+})
+
+test('section base coords round-trip in word2/word3', () => {
+  const words: number[] = []
+  const block = {
+    position: [10, 17, 4] as [number, number, number],
+    visible_faces: 1 << 2,
+    ao_data: [[3, 3, 3, 3]],
+    light_data: [[1, 1, 1, 1]],
+    light_combined: [[255, 255, 255, 255]],
+  }
+  const { textureIndexMapping, tintPalette } = getShaderCubeResources()
+  const model = { elements: [{ faces: SIX_FACE_TEXTURES }] }
+  const sectionOrigin = { x: 0, y: 16, z: 32 }
+  tryBuildShaderCubeInstances(
+    block,
+    { blockName: 'stone', blockProps: {}, isCube: true, model },
+    model,
+    { sectionOrigin, sectionHeight: 16, tintPalette, textureIndexMapping },
+    words,
+  )
+  const base = decodeSectionBaseFromWords(words[2]!, words[3]!)
+  expect(base).toEqual(sectionOrigin)
+  const sX = (words[3]! & 0xffff) - WORD3.SECTION_BIAS
+  const sZ = ((words[3]! >>> 16) & 0xffff) - WORD3.SECTION_BIAS
+  const sY = ((words[2]! >>> WORD2.SECTION_Y_SHIFT) & 0x1f) - 4
+  expect(sX * 16).toBe(sectionOrigin.x)
+  expect(sY * 16).toBe(sectionOrigin.y)
+  expect(sZ * 16).toBe(sectionOrigin.z)
+})
+
+test('GlobalBlockBuffer: free-list reuses slot with EMPTY sentinel', () => {
+  const scene = new THREE.Scene()
+  const mat = createCubeBlockMaterial()
+  const buffer = new GlobalBlockBuffer(mat, scene)
+
+  const words = new Uint32Array([
+    1, 2, 0, packWord3(0, 0),
+    3, 4, 0, packWord3(0, 0),
+  ])
+  buffer.addSection('a', words, 2)
+  expect(buffer.mesh.geometry.instanceCount).toBe(2)
+
+  buffer.removeSection('a')
+  const w2Attr = buffer.mesh.geometry.getAttribute('a_w2') as THREE.InstancedBufferAttribute
+  expect(w2Attr.array[0]! & (1 << WORD2.EMPTY_SHIFT)).not.toBe(0)
+  expect(w2Attr.array[1]! & (1 << WORD2.EMPTY_SHIFT)).not.toBe(0)
+
+  const wordsB = new Uint32Array([5, 6, 0, packWord3(16, 0)])
+  buffer.addSection('b', wordsB, 1)
+  expect(buffer.mesh.geometry.getAttribute('a_w0').array[0]).toBe(5)
+
+  buffer.dispose()
+  mat.dispose()
 })

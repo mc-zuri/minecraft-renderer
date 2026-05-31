@@ -31,7 +31,7 @@ export interface ExportedSection {
   shaderCubes?: {
     words: Uint32Array
     count: number
-    formatVersion: 1
+    formatVersion: 2
   }
 }
 

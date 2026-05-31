@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { VERTICES_PER_FACE } from './shaders/cubeBlockShader'
+import { SHADER_CUBES_WORDS_PER_FACE } from '../wasm-mesher/bridge/shaderCubeBridge'
 
 export type ShaderCubeInstanceData = {
   words: Uint32Array
@@ -22,15 +23,19 @@ export function buildShaderCubeGeometry(
   const w0 = new Uint32Array(faceCount)
   const w1 = new Uint32Array(faceCount)
   const w2 = new Uint32Array(faceCount)
+  const w3 = new Uint32Array(faceCount)
+  const stride = SHADER_CUBES_WORDS_PER_FACE
   for (let i = 0; i < faceCount; i++) {
-    w0[i] = words[i * 3]!
-    w1[i] = words[i * 3 + 1]!
-    w2[i] = words[i * 3 + 2]!
+    w0[i] = words[i * stride]!
+    w1[i] = words[i * stride + 1]!
+    w2[i] = words[i * stride + 2]!
+    w3[i] = words[i * stride + 3]!
   }
 
   geometry.setAttribute('a_w0', new THREE.InstancedBufferAttribute(w0, 1))
   geometry.setAttribute('a_w1', new THREE.InstancedBufferAttribute(w1, 1))
   geometry.setAttribute('a_w2', new THREE.InstancedBufferAttribute(w2, 1))
+  geometry.setAttribute('a_w3', new THREE.InstancedBufferAttribute(w3, 1))
 
   geometry.instanceCount = faceCount
   geometry.boundingBox = new THREE.Box3(
@@ -53,7 +58,7 @@ const _raycastPoint = new THREE.Vector3()
  * Enough for third-person camera collision; block pick uses mineflayer, not mesh raycast.
  */
 export function attachShaderCubeRaycast(
-  mesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>,
+  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material>,
 ): void {
   mesh.raycast = (raycaster, intersects) => {
     const { geometry } = mesh
@@ -77,7 +82,7 @@ export function createShaderCubeMesh(
   const mesh = new THREE.Mesh(geometry, material)
   mesh.name = 'shaderMesh'
   mesh.matrixAutoUpdate = false
-  mesh.frustumCulled = true
+  mesh.frustumCulled = false
   attachShaderCubeRaycast(mesh)
   return mesh
 }

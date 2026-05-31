@@ -10,6 +10,11 @@ precision highp int;
 layout(location = 0) in uint a_w0;
 layout(location = 1) in uint a_w1;
 layout(location = 2) in uint a_w2;
+layout(location = 3) in uint a_w3;
+
+// World camera position split for stable float32 subtraction (see relativePos below).
+uniform vec3 u_cameraOrigin;
+uniform vec3 u_cameraOriginFrac;
 
 out float v_light;
 out float v_ao;
@@ -77,6 +82,12 @@ const int VI_NORMAL[6]  = int[6](0, 1, 2, 2, 1, 3);
 const int VI_FLIPPED[6] = int[6](0, 3, 2, 0, 1, 3);
 
 void main() {
+    // Empty slot sentinel (freed section range in global buffer)
+    if (((a_w2 >> 18u) & 0x1u) != 0u) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        return;
+    }
+
     // Non-indexed geometry: 6 vertices per face instance (2 triangles)
     int vi_total = gl_VertexID % 6;
     int triangle = vi_total / 3;      // 0 or 1
@@ -135,10 +146,16 @@ void main() {
         v_uv = vec2(1.0 - u, 1.0 - v);
     }
 
-    // --- Position (same vi for everything; winding handled by effCorner swap above) ---
+    // --- Position: section base (multiples of 16) + face quad + block-local 0..15 ---
+    int sX = int(a_w3 & 0xFFFFu) - 32768;
+    int sZ = int((a_w3 >> 16u) & 0xFFFFu) - 32768;
+    int sY = int((a_w2 >> 13u) & 0x1Fu) - 4;
+    vec3 sectionBase = vec3(float(sX * 16), float(sY * 16), float(sZ * 16));
     vec3 facePos = BASE[faceId] + u * DU[faceId] + v * DV[faceId];
-    vec3 localPos = facePos + vec3(float(lx), float(ly), float(lz)) - 8.0;
-    vec4 mvPosition = modelViewMatrix * vec4(localPos, 1.0);
+    vec3 blockLocal = vec3(float(lx), float(ly), float(lz));
+    // (sectionBase - u_cameraOrigin) is exact in float32; add small terms after.
+    vec3 relativePos = (sectionBase - u_cameraOrigin) + facePos + blockLocal - u_cameraOriginFrac;
+    vec4 mvPosition = modelViewMatrix * vec4(relativePos, 1.0);
     gl_Position = projectionMatrix * mvPosition;
 
 #ifdef USE_LOGDEPTHBUF
@@ -275,6 +292,8 @@ export function createCubeBlockMaterial(): THREE.ShaderMaterial {
                 u_atlas: { value: null },
                 u_tintPalette: { value: null },
                 u_debugMode: { value: 0 },
+                u_cameraOrigin: { value: new THREE.Vector3() },
+                u_cameraOriginFrac: { value: new THREE.Vector3() },
             },
         ]),
         // Opaque full cubes — WASM mesher already culls interior faces between
@@ -320,5 +339,15 @@ export const WORD1 = {
 export const WORD2 = {
     TEX_INDEX_BITS: 12,
     DIAGONAL_FLAG_SHIFT: 12,
-    SPARE_BITS: 19,
+    SECTION_Y_SHIFT: 13,
+    SECTION_Y_BITS: 5,
+    EMPTY_SHIFT: 18,
+    SPARE_BITS: 13,
+} as const
+
+/** Section base X/Z packed into a_w3 (16-block units, biased). */
+export const WORD3 = {
+    SECTION_X_BITS: 16,
+    SECTION_Z_BITS: 16,
+    SECTION_BIAS: 32768,
 } as const

@@ -1,15 +1,16 @@
 /**
- * Pack visible WASM block faces into GPU-instanced shader words (3×Uint32 per face).
+ * Pack visible WASM block faces into GPU-instanced shader words (4×Uint32 per face).
  * Each emitted instance becomes one face quad on the shader-cube mesh; the legacy
  * vertex path is bypassed for blocks that pass {@link isShaderCubeBlock}.
  */
 
 import blocksAtlasesJson from 'mc-assets/dist/blocksAtlases.json'
-import { WORD0, WORD1, WORD2 } from '../../three/shaders/cubeBlockShader'
+import { WORD0, WORD1, WORD2, WORD3 } from '../../three/shaders/cubeBlockShader'
 import { TextureIndexMapping, type TextureEntry } from '../../three/shaders/textureIndexMapping'
 import { TintPalette } from '../../three/shaders/tintPalette'
 
-export const SHADER_CUBES_FORMAT_VERSION = 1 as const
+export const SHADER_CUBES_FORMAT_VERSION = 2 as const
+export const SHADER_CUBES_WORDS_PER_FACE = 4 as const
 
 export type ShaderCubesOutput = {
   words: Uint32Array
@@ -223,12 +224,33 @@ function packWord1(lightCombined: number[]): number {
   return w >>> 0
 }
 
-function packWord2(texIndex: number, aoDiagonalFlip: boolean): number {
+export function packWord2(texIndex: number, aoDiagonalFlip: boolean, sectionBaseY: number): number {
   let w = texIndex & ((1 << WORD2.TEX_INDEX_BITS) - 1)
   if (aoDiagonalFlip) {
     w |= 1 << WORD2.DIAGONAL_FLAG_SHIFT
   }
+  const sectionY = ((Math.floor(sectionBaseY / 16) + 4) & 0x1f) << WORD2.SECTION_Y_SHIFT
+  w |= sectionY
   return w >>> 0
+}
+
+export function packWord3(sectionBaseX: number, sectionBaseZ: number): number {
+  const sx = (Math.floor(sectionBaseX / 16) + WORD3.SECTION_BIAS) & 0xffff
+  const sz = (Math.floor(sectionBaseZ / 16) + WORD3.SECTION_BIAS) & 0xffff
+  return (sx | (sz << 16)) >>> 0
+}
+
+/** Decode section base block coords from packed words (round-trip helper for tests). */
+export function decodeSectionBaseFromWords(word2: number, word3: number): { x: number, y: number, z: number } {
+  const sX = (word3 & 0xffff) - WORD3.SECTION_BIAS
+  const sZ = ((word3 >>> 16) & 0xffff) - WORD3.SECTION_BIAS
+  const sY = ((word2 >>> WORD2.SECTION_Y_SHIFT) & ((1 << WORD2.SECTION_Y_BITS) - 1)) - 4
+  return { x: sX * 16, y: sY * 16, z: sZ * 16 }
+}
+
+/** EMPTY sentinel for a freed global-buffer instance slot. */
+export function packWord2Empty(): number {
+  return (1 << WORD2.EMPTY_SHIFT) >>> 0
 }
 
 /** 12-bit texture tile index from packed word2. */
@@ -277,7 +299,7 @@ export type BuildShaderCubeInstancesOpts = {
 }
 
 /**
- * Pack all visible faces of one block into `words` (3 uints per face).
+ * Pack all visible faces of one block into `words` (4 uints per face).
  * Returns false if the block must use the legacy vertex path.
  */
 export function tryBuildShaderCubeInstances(
@@ -345,18 +367,19 @@ export function tryBuildShaderCubeInstances(
     words.push(
       packWord0(lx, ly, lz, faceIdx, tintIndex, ao),
       packWord1(lightCombined),
-      packWord2(texIndex, aoDiagonalFlip),
+      packWord2(texIndex, aoDiagonalFlip, sectionOrigin.y),
+      packWord3(sectionOrigin.x, sectionOrigin.z),
     )
   }
 
   return true
 }
 
-export function buildShaderCubesFromWords(wordTriples: number[]): ShaderCubesOutput | undefined {
-  const faceCount = Math.floor(wordTriples.length / 3)
+export function buildShaderCubesFromWords(wordQuads: number[]): ShaderCubesOutput | undefined {
+  const faceCount = Math.floor(wordQuads.length / SHADER_CUBES_WORDS_PER_FACE)
   if (faceCount === 0) return undefined
   return {
-    words: new Uint32Array(wordTriples),
+    words: new Uint32Array(wordQuads),
     count: faceCount,
     formatVersion: SHADER_CUBES_FORMAT_VERSION,
   }

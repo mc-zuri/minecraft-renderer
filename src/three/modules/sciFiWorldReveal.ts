@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { WorldRendererThree } from '../worldRendererThree'
 import type { RendererModuleController, RendererModuleManifest } from '../rendererModuleSystem'
 import type { MesherGeometryOutput } from '../../mesher-shared/shared'
+import type { GlobalBlockBufferShaderData } from '../globalBlockBuffer'
 
 const SCI_FI_CYAN = new THREE.Color(13 / 255, 234 / 255, 238 / 255)
 const CHUNKS_THRESHOLD = 9
@@ -22,6 +23,8 @@ interface RevealingSection {
   phase: 'wireframe' | 'transitioning' | 'complete'
   /** Legacy + shader render meshes hidden during reveal */
   renderMeshRefs: THREE.Mesh[]
+  /** Shader cubes temporarily removed from globalBlockBuffer during reveal. */
+  globalShaderRestore?: GlobalBlockBufferShaderData
   wireframeMs: number
   revealMs: number
 }
@@ -44,6 +47,8 @@ export class SciFiWorldRevealModule implements RendererModuleController {
   private onWorldSwitchedCb: (() => void) | null = null
   private patched = false
   private initialWaveDone = false
+  /** True after every section from the first reveal wave has finished animating. */
+  private initialRevealWaveSettled = false
 
   // Wireframe materials
   private readonly wireframeMaterial!: THREE.LineBasicMaterial
@@ -61,11 +66,7 @@ export class SciFiWorldRevealModule implements RendererModuleController {
   private originalSceneAdd: ((...object: THREE.Object3D[]) => THREE.Scene) | null = null
   private originalHandleWorkerMessage: ((data: { geometry: MesherGeometryOutput; key: string; type: string }) => void) | null = null
 
-  private configEnabled = true
-
   constructor(private readonly worldRenderer: WorldRendererThree) {
-    this.configEnabled = this.worldRenderer.worldRendererConfig.futuristicReveal === true
-
     this.wireframeMaterial = new THREE.LineBasicMaterial({
       color: SCI_FI_CYAN,
       transparent: true,
@@ -83,9 +84,27 @@ export class SciFiWorldRevealModule implements RendererModuleController {
     })
   }
 
+  /** Read live config — option may sync after module construction (watchOptions). */
+  isFuturisticRevealConfigured (): boolean {
+    return this.worldRenderer.worldRendererConfig.futuristicReveal === true
+  }
+
+  /** Until the first cinematic wave fully completes, shader sections stay off the global buffer. */
+  isInInitialRevealCampaign (): boolean {
+    return this.enabled && !this.initialRevealWaveSettled
+  }
+
+  autoEnableCheck (): boolean {
+    return this.isFuturisticRevealConfigured()
+  }
+
   enable(): void {
-    if (!this.configEnabled) return
-    if (this.enabled) return
+    if (!this.isFuturisticRevealConfigured()) return
+    if (this.enabled && this.patched) return
+    if (this.enabled && !this.patched) {
+      this.patchWorldRenderer()
+      return
+    }
     this.enabled = true
     this.patchWorldRenderer()
   }
@@ -433,6 +452,9 @@ export class SciFiWorldRevealModule implements RendererModuleController {
     // Create wireframe geometry
     const wireframeGeom = this.createWireframeGeometry(geometry)
 
+    const global = this.worldRenderer.chunkMeshManager.globalBlockBuffer
+    const globalShaderRestore = global?.hasSection(key) ? global.takeSectionData(key) : undefined
+
     const renderMeshRefs = this.hideSectionRenderMeshes(key)
     // Main wireframe
     const wireframe = new THREE.LineSegments(wireframeGeom, this.wireframeMaterial.clone())
@@ -467,6 +489,7 @@ export class SciFiWorldRevealModule implements RendererModuleController {
       revealStartTime: performance.now(),
       phase: 'wireframe',
       renderMeshRefs,
+      globalShaderRestore,
       wireframeMs,
       revealMs,
     }
@@ -482,10 +505,7 @@ export class SciFiWorldRevealModule implements RendererModuleController {
     this.revealingSections.set(key, section)
   }
 
-  /**
-   * Create wireframe geometry from mesh geometry
-   */
-  /** 16×16×16 section AABB wireframe (section-local −8…+8) for shader-only sections. */
+  /** 16³ section bounds wireframe in section-local coords (−8…+8). */
   private createSectionBoundsWireframe(): THREE.BufferGeometry {
     const min = -8
     const max = 8
@@ -661,10 +681,24 @@ export class SciFiWorldRevealModule implements RendererModuleController {
     this.revealingSections.delete(section.key)
     this.revealedChunks.add(section.key)
 
+    if (this.revealTriggered && this.revealingSections.size === 0) {
+      this.initialRevealWaveSettled = true
+    }
+
     for (const mesh of section.renderMeshRefs) {
       this.restoreMeshMaterial(mesh)
       mesh.visible = true
       delete (mesh as any).hiddenByReveal
+    }
+
+    this.worldRenderer.chunkMeshManager.migrateDeferredShaderToGlobal(section.key)
+
+    if (section.globalShaderRestore) {
+      this.worldRenderer.chunkMeshManager.globalBlockBuffer?.addSection(
+        section.key,
+        section.globalShaderRestore.words,
+        section.globalShaderRestore.count,
+      )
     }
 
     // Clean up wireframe group
@@ -717,6 +751,8 @@ export class SciFiWorldRevealModule implements RendererModuleController {
     this.revealedChunks.clear()
     this.finishedChunkCount = 0
     this.revealTriggered = false
+    this.initialWaveDone = false
+    this.initialRevealWaveSettled = false
     this.revealStartTime = 0
     this.pulseTime = 0
   }
