@@ -4,7 +4,7 @@ import type { FuturisticCameraId, FuturisticSceneId, MinecraftBlockGroupId } fro
 /** Single source of truth for menu-background defaults (settings + runtime fallbacks). */
 export const MENU_BACKGROUND_OPTION_DEFAULTS = {
   mode: 'futuristic' as MenuBackgroundMode,
-  minecraftTextures: true,
+  minecraftTextures: true as boolean,
   futuristicScene: 'light' as FuturisticSceneId,
   futuristicCamera: 'dive' as FuturisticCameraId,
   futuristicBlockGroup: 'stainedGlass' as MinecraftBlockGroupId,
