@@ -22,6 +22,7 @@ export interface SoundSystem {
 }
 
 import type { MenuBackgroundOptions } from '../three/menuBackground/types'
+import type { PerformanceInstabilityFactors } from '../performanceMonitor'
 
 /** Graphics backend configuration */
 export interface GraphicsBackendConfig {
@@ -75,6 +76,8 @@ export interface RendererReactiveState {
     heightmaps: Map<string, Int16Array>
     allChunksLoaded: boolean
     mesherWork: boolean
+    /** Low-FPS / render instability factors (see `performanceMonitor`). */
+    instabilityFactors: PerformanceInstabilityFactors
     intersectMedia: any | null
   }
   renderer: string

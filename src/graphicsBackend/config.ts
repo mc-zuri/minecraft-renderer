@@ -3,6 +3,7 @@
  */
 
 import { proxy } from 'valtio'
+import { defaultPerformanceInstabilityFactors } from '../performanceMonitor'
 import type {
   GraphicsBackendConfig,
   RendererReactiveState,
@@ -116,6 +117,7 @@ export const getDefaultRendererState = (): {
         heightmaps: new Map<string, Int16Array>(),
         allChunksLoaded: false,
         mesherWork: false,
+        instabilityFactors: defaultPerformanceInstabilityFactors(),
         intersectMedia: null
       },
       renderer: '...',

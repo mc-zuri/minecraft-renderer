@@ -35,6 +35,7 @@ import { downloadWorldGeometry } from './worldGeometryExport'
 import { ChunkMeshManager } from './chunkMeshManager'
 import type { RendererModuleManifest, RegisteredModule, RendererModuleController } from './rendererModuleSystem'
 import { BUILTIN_MODULES } from './modules/index'
+import { formatPerformanceFactorsDebug, PerformanceMonitor } from '../performanceMonitor'
 
 type SectionKey = string
 
@@ -56,6 +57,7 @@ export class WorldRendererThree extends WorldRendererCommon {
   ambientLight = new THREE.AmbientLight(0xcc_cc_cc)
   directionalLight = new THREE.DirectionalLight(0xff_ff_ff, 0.5)
   entities = new Entities(this, (globalThis as any).mcData)
+  performanceMonitor!: PerformanceMonitor
   cameraGroupVr?: THREE.Object3D
   material = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, alphaTest: 0.1 })
   itemsTexture!: THREE.Texture
@@ -152,6 +154,8 @@ export class WorldRendererThree extends WorldRendererCommon {
   constructor(public renderer: THREE.WebGLRenderer, public initOptions: GraphicsInitOptions, public displayOptions: DisplayWorldOptions) {
     if (!displayOptions.resourcesManager) throw new Error('resourcesManager is required in displayOptions')
     super(displayOptions.resourcesManager, displayOptions, initOptions)
+
+    this.performanceMonitor = new PerformanceMonitor(this.reactiveState.world.instabilityFactors)
 
     this.renderer = renderer
     displayOptions.rendererState.renderer = WorldRendererThree.getRendererInfo(renderer) ?? '...'
@@ -712,7 +716,10 @@ export class WorldRendererThree extends WorldRendererCommon {
         text += `B: ${formatCompact(this.blocksRendered)} `
         text += `MEM: ${this.chunkMeshManager.getEstimatedMemoryUsage().total} `
         const poolStats = this.chunkMeshManager.getStats()
-        text += `POOL: ${poolStats.activeCount}/${poolStats.poolSize}`
+        text += `POOL: ${poolStats.activeCount}/${poolStats.poolSize} `
+        const pf = formatPerformanceFactorsDebug(this.reactiveState.world.instabilityFactors)
+        if (pf) text += `PF: ${pf} `
+        // entities can be seen in F3
         pane.updateText(text)
         this.backendInfoReport = text
       }
@@ -1200,8 +1207,11 @@ export class WorldRendererThree extends WorldRendererCommon {
       this.camera.updateProjectionMatrix()
     }
 
+    let entitiesRenderMs = 0
     if (!this.reactiveDebugParams.disableEntities) {
+      const entitiesStart = performance.now()
       this.entities.render()
+      entitiesRenderMs = performance.now() - entitiesStart
     }
 
     // eslint-disable-next-line @typescript-eslint/non-nullable-type-assertion-style
@@ -1242,6 +1252,13 @@ export class WorldRendererThree extends WorldRendererCommon {
     this.renderTimeAvgCount++
     this.renderTimeAvg = ((this.renderTimeAvg * (this.renderTimeAvgCount - 1)) + totalTime) / this.renderTimeAvgCount
     this.renderTimeMax = Math.max(this.renderTimeMax, totalTime)
+
+    this.performanceMonitor.onFrame({
+      totalMs: totalTime,
+      entitiesMs: entitiesRenderMs,
+      loadedTextureCount: this.renderer.info.memory.textures,
+      fps: this.lastFps,
+    })
   }
 
   renderHead(position: Vec3, rotation: number, isWall: boolean, blockEntity) {
@@ -1449,6 +1466,7 @@ export class WorldRendererThree extends WorldRendererCommon {
   }
 
   destroy(): void {
+    this.performanceMonitor?.reset()
     this.pendingSectionUpdates.clear()
     this.pendingSectionBufferStartTimes.clear()
     this.chunkMeshManager.dispose()
