@@ -3,7 +3,7 @@ import { GraphicsBackend, GraphicsBackendLoader } from '../graphicsBackend'
 import { useWorkerProxy, deepPrepareForTransfer, findProblemTransfer } from '../lib/workerProxy'
 import { meshersSendMcDataAwait } from '../lib/worldrendererCommon'
 import { dynamicMcDataFiles } from '../lib/buildSharedConfig.mjs'
-import { addNewStat } from '../lib/ui/newStats'
+import { addNewStat, MC_RENDERER_DEBUG_OVERLAY_CLASS } from '../lib/ui/newStats'
 import type { MenuBackgroundOptions } from './menuBackground/types'
 import { MENU_BACKGROUND_MC_VERSION } from './menuBackground/shared'
 import { createGraphicsBackendBase, type ThreeJsBackendMethods } from './graphicsBackendBase'
@@ -121,6 +121,17 @@ export const createGraphicsBackendOffThread: GraphicsBackendLoader = async (init
         fpsStat.updateText(`FPS: ${fps.toFixed(0)} (${avgRenderTime.toFixed(0)}ms/${worstRenderTime.toFixed(0)}ms)`)
         options.nonReactiveState.fps = 0
       }, 1000)
+
+      const chunksStat = addNewStat('downloaded-chunks', 100, 140, 20, {
+        className: MC_RENDERER_DEBUG_OVERLAY_CLASS,
+      })
+      setInterval(() => {
+        const advanced = (initOptions.config.statsVisible ?? 0) > 1
+        chunksStat.setVisibility(advanced)
+        if (advanced) {
+          chunksStat.updateText(options.nonReactiveState.world.chunksFullInfo)
+        }
+      }, 200)
     },
     disconnect() {
       canvas.destroy()

@@ -132,7 +132,8 @@ export const getDefaultRendererState = (): {
       avgRenderTime: 0,
       world: {
         chunksLoaded: new Set(),
-        chunksTotalNumber: 0
+        chunksTotalNumber: 0,
+        chunksFullInfo: '-'
       },
       renderer: {
         timeline: {
