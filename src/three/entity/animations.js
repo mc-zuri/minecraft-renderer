@@ -87,7 +87,13 @@ export class WalkingGeneralSwing extends PlayerAnimation {
   }
 
   swingArm() {
-    this._swingTime = 0
+    // Only (re)start once we're past the halfway point of the current swing, like
+    // vanilla EntityLiving.swingArm. Otherwise a burst of `animation` packets
+    // (rapid clicks / digging) keeps resetting _swingTime and the arm never
+    // completes an arc, looking like a stutter of fast partial swings.
+    if (this._swingTime === null || this._swingTime >= this._swingDuration / 2) {
+      this._swingTime = 0
+    }
   }
 
   resetLocomotion() {
@@ -190,8 +196,6 @@ export class WalkingGeneralSwing extends PlayerAnimation {
     const speed = baseSpeed * crouchSpeedMul
 
     this._phase += dt * speed * moveBlend
-
-    this._phase += dt * speed * moveBlend
     this._idlePhase += dt * 1.15
 
     const t = this._phase + (runBlend > 0.5 ? Math.PI * 0.5 : 0)
@@ -285,17 +289,22 @@ const HitAnimation = {
   animate(progress, player, isMovingOrRunning) {
     if (!player?.skin?.rightArm?.rotation) return
 
-    const t = progress * 18
-    player.skin.rightArm.rotation.x = -0.4537860552 * 2 + 2 * Math.sin(t + Math.PI) * 0.3
+    // One swing = one arc. `swing` rises to its peak at the middle of the swing
+    // (progress 0.5) and returns to rest at both ends, matching vanilla's
+    // `sin(swingProgress * PI)` and the first-person hand. Driving the trig with
+    // `progress * 18` previously ran ~3 sine cycles per click, which made other
+    // players' arms look like they were swinging several times per hit.
+    const swing = Math.sin(progress * Math.PI)
+    player.skin.rightArm.rotation.x = -0.4537860552 * 2 - 2 * swing * 0.3
 
     if (!isMovingOrRunning) {
       const basicArmRotationZ = 0.01 * Math.PI + 0.06
-      player.skin.rightArm.rotation.z = -Math.cos(t) * 0.403 + basicArmRotationZ
-      player.skin.body.rotation.y = -Math.cos(t) * 0.06
-      player.skin.leftArm.rotation.x = Math.sin(t + Math.PI) * 0.077
-      player.skin.leftArm.rotation.z = -Math.cos(t) * 0.015 + 0.13 - 0.05
-      player.skin.leftArm.position.z = Math.cos(t) * 0.3
-      player.skin.leftArm.position.x = 5 - Math.cos(t) * 0.05
+      player.skin.rightArm.rotation.z = -swing * 0.403 + basicArmRotationZ
+      player.skin.body.rotation.y = -swing * 0.06
+      player.skin.leftArm.rotation.x = -swing * 0.077
+      player.skin.leftArm.rotation.z = -swing * 0.015 + 0.13 - 0.05
+      player.skin.leftArm.position.z = swing * 0.3
+      player.skin.leftArm.position.x = 5 - swing * 0.05
     }
   },
 }

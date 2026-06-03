@@ -902,8 +902,13 @@ export class Entities {
     // TODO CLEANUP!
     // Handle special player entity ID for bot entity in third person
     const key = String(entityPlayerId)
-    if (this.playerPerAnimation[key] === animation) return
-    this.playerPerAnimation[key] = animation
+    // `oneSwing` is a one-shot event, not a persistent state: two swings in a row
+    // are both 'oneSwing', so deduping by name would swallow every repeat swing
+    // while standing still. Only dedupe the persistent state animations.
+    if (animation !== 'oneSwing') {
+      if (this.playerPerAnimation[key] === animation) return
+      this.playerPerAnimation[key] = animation
+    }
 
     if (entityPlayerId === 'player_entity' && this.playerEntity?.playerObject) {
       const { playerObject } = this.playerEntity
