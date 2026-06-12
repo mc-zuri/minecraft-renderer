@@ -147,8 +147,9 @@ void main() {
     }
 
     // --- Position: section base (multiples of 16) + face quad + block-local 0..15 ---
-    int sX = int(a_w3 & 0xFFFFu) - 32768;
-    int sZ = int((a_w3 >> 16u) & 0xFFFFu) - 32768;
+    // Must mirror WORD2/WORD3 constants in TS (GLSL cannot import them).
+    int sX = int((a_w3 & 0xFFFFu) | (((a_w2 >> 19u) & 0x3Fu) << 16u)) - 2097152;
+    int sZ = int(((a_w3 >> 16u) & 0xFFFFu) | (((a_w2 >> 25u) & 0x3Fu) << 16u)) - 2097152;
     int sY = int((a_w2 >> 13u) & 0x1Fu) - 4;
     vec3 sectionBase = vec3(float(sX * 16), float(sY * 16), float(sZ * 16));
     vec3 facePos = BASE[faceId] + u * DU[faceId] + v * DV[faceId];
@@ -342,12 +343,17 @@ export const WORD2 = {
     SECTION_Y_SHIFT: 13,
     SECTION_Y_BITS: 5,
     EMPTY_SHIFT: 18,
-    SPARE_BITS: 13,
+    SECTION_X_HI_SHIFT: 19,
+    SECTION_Z_HI_SHIFT: 25,
+    SECTION_HI_BITS: 6,
+    SPARE_BITS: 1,
 } as const
 
-/** Section base X/Z packed into a_w3 (16-block units, biased). */
+/** Section base X/Z: low 16 bits in a_w3, high 6 in a_w2 (22-bit biased section index). */
 export const WORD3 = {
-    SECTION_X_BITS: 16,
-    SECTION_Z_BITS: 16,
-    SECTION_BIAS: 32768,
+    SECTION_BITS: 22,
+    SECTION_MASK: (1 << 22) - 1,
+    LO_BITS: 16,
+    HI_BITS: 6,
+    SECTION_BIAS: 2097152,
 } as const

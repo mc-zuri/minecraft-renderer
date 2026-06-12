@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from 'vitest'
-import { WORD0, WORD2, WORD3 } from '../../three/shaders/cubeBlockShader'
+import { WORD0, WORD2 } from '../../three/shaders/cubeBlockShader'
 import {
   resetShaderCubeResources,
   getShaderCubeResources,
@@ -9,6 +9,7 @@ import {
   countVisibleFaces,
   unpackTexIndexFromWord2,
   decodeSectionBaseFromWords,
+  packWord2Empty,
   packWord3,
   SHADER_CUBES_FORMAT_VERSION,
   SHADER_CUBES_WORDS_PER_FACE,
@@ -304,33 +305,47 @@ test('doAO false: full bright AO/light and no diagonal flip', () => {
   expect(words[2]! & (1 << WORD2.DIAGONAL_FLAG_SHIFT)).toBe(0)
 })
 
-test('section base coords round-trip in word2/word3', () => {
-  const words: number[] = []
-  const block = {
-    position: [10, 17, 4] as [number, number, number],
-    visible_faces: 1 << 2,
-    ao_data: [[3, 3, 3, 3]],
-    light_data: [[1, 1, 1, 1]],
-    light_combined: [[255, 255, 255, 255]],
-  }
-  const { textureIndexMapping, tintPalette } = getShaderCubeResources()
-  const model = { elements: [{ faces: SIX_FACE_TEXTURES }] }
-  const sectionOrigin = { x: 0, y: 16, z: 32 }
-  tryBuildShaderCubeInstances(
-    block,
-    { blockName: 'stone', blockProps: {}, isCube: true, model },
-    model,
-    { sectionOrigin, sectionHeight: 16, tintPalette, textureIndexMapping },
-    words,
-  )
-  const base = decodeSectionBaseFromWords(words[2]!, words[3]!)
-  expect(base).toEqual(sectionOrigin)
-  const sX = (words[3]! & 0xffff) - WORD3.SECTION_BIAS
-  const sZ = ((words[3]! >>> 16) & 0xffff) - WORD3.SECTION_BIAS
-  const sY = ((words[2]! >>> WORD2.SECTION_Y_SHIFT) & 0x1f) - 4
-  expect(sX * 16).toBe(sectionOrigin.x)
-  expect(sY * 16).toBe(sectionOrigin.y)
-  expect(sZ * 16).toBe(sectionOrigin.z)
+const SECTION_ORIGIN_ROUND_TRIP_CASES: Array<{ x: number, y: number, z: number }> = [
+  { x: 0, y: 16, z: 32 },
+  { x: 0, y: 0, z: 0 },
+  { x: 524288, y: 0, z: 524288 },
+  { x: 1000000, y: 64, z: 1000000 },
+  { x: 33000000, y: 0, z: 33000000 },
+  { x: -524288, y: 0, z: -524288 },
+  { x: -1000000, y: 0, z: -1000000 },
+  { x: 1000000, y: 0, z: -1000000 },
+]
+
+test.each(SECTION_ORIGIN_ROUND_TRIP_CASES)(
+  'section base coords round-trip in word2/word3 at origin (%#)',
+  (sectionOrigin) => {
+    const words: number[] = []
+    const block = {
+      position: [10, 17, 4] as [number, number, number],
+      visible_faces: 1 << 2,
+      ao_data: [[3, 3, 3, 3]],
+      light_data: [[1, 1, 1, 1]],
+      light_combined: [[255, 255, 255, 255]],
+    }
+    const { textureIndexMapping, tintPalette } = getShaderCubeResources()
+    const model = { elements: [{ faces: SIX_FACE_TEXTURES }] }
+    tryBuildShaderCubeInstances(
+      block,
+      { blockName: 'stone', blockProps: {}, isCube: true, model },
+      model,
+      { sectionOrigin, sectionHeight: 16, tintPalette, textureIndexMapping },
+      words,
+    )
+    const base = decodeSectionBaseFromWords(words[2]!, words[3]!)
+    expect(base).toEqual(sectionOrigin)
+  },
+)
+
+test('packWord2Empty: bit 18 set regardless of high X/Z bits in word2', () => {
+  const empty = packWord2Empty()
+  expect(empty & (1 << WORD2.EMPTY_SHIFT)).not.toBe(0)
+  const withHighBits = empty | (0x3f << WORD2.SECTION_X_HI_SHIFT) | (0x3f << WORD2.SECTION_Z_HI_SHIFT)
+  expect(withHighBits & (1 << WORD2.EMPTY_SHIFT)).not.toBe(0)
 })
 
 test('GlobalBlockBuffer: free-list reuses slot with EMPTY sentinel', () => {

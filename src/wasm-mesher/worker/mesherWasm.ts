@@ -1356,7 +1356,7 @@ function processColumnTick() {
             geometry.shaderCubes = {
               words: new Uint32Array(exported.shaderCubes.words),
               count: exported.shaderCubes.count,
-              formatVersion: 2,
+              formatVersion: 3,
             }
           }
           transferable = [

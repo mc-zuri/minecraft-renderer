@@ -523,8 +523,6 @@ export function renderWasmOutputToGeometry(
     const [bx, by, bz] = block.position
     const blockStateId = block.block_state_id
 
-    log(`[WASM] Processing block at (${bx}, ${by}, ${bz}), stateId=${blockStateId}, visible_faces=0b${block.visible_faces.toString(2).padStart(6, '0')}`)
-
     const prismBlock = PrismarineBlock.fromStateId(blockStateId, 1)
 
     let biome: string | undefined

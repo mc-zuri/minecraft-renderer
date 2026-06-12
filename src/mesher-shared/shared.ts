@@ -68,7 +68,7 @@ export type MesherGeometryOutput = {
   shaderCubes?: {
     words: Uint32Array
     count: number
-    formatVersion: 2
+    formatVersion: 3
   }
 }
 
