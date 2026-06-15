@@ -319,6 +319,10 @@ export class GlobalLegacyBuffer {
     this.syncDefaultDrawGroups()
   }
 
+  hasPendingUploads (): boolean {
+    return this.pendingRanges.length > 0
+  }
+
   uploadDirtyRange (): void {
     const r = this.pendingRanges[0]
     if (!r) return

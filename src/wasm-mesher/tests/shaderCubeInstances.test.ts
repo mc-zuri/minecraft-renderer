@@ -15,6 +15,7 @@ import {
   SHADER_CUBES_WORDS_PER_FACE,
 } from '../bridge/shaderCubeBridge'
 import { GlobalBlockBuffer } from '../../three/globalBlockBuffer'
+import { buildVisibleCubeSpans } from '../../three/cubeDrawSpans'
 import { createCubeBlockMaterial, computeSectionOriginRel } from '../../three/shaders/cubeBlockShader'
 import * as THREE from 'three'
 import { renderWasmOutputToGeometry } from '../bridge/render-from-wasm'
@@ -687,6 +688,35 @@ test('GlobalBlockBuffer: takeSectionData reads relocated section slot', () => {
   expect(taken?.count).toBe(2)
   expect(taken?.words[0]).toBe(30)
   expect(taken?.words[4]).toBe(31)
+
+  buffer.dispose()
+  mat.dispose()
+})
+
+test('GlobalBlockBuffer: pendingMove draw start uses oldStart for visible spans', () => {
+  const scene = new THREE.Scene()
+  const mat = createCubeBlockMaterial()
+  const buffer = new GlobalBlockBuffer(mat, scene)
+
+  buffer.addSection('a', makeSectionWords([10]), 1)
+  buffer.addSection('b', makeSectionWords([20]), 1)
+  buffer.addSection('c', makeSectionWords([30]), 1)
+  buffer.removeSection('b')
+  drainAllUploads(buffer)
+
+  buffer.compactStep()
+  const move = buffer.getPendingMove()
+  expect(move?.key).toBe('c')
+
+  const slotStart = buffer.getSectionSlot('c')!.start
+  expect(buffer.getSectionDrawStart('c')).toBe(move!.oldStart)
+  expect(buffer.getSectionDrawStart('c')).not.toBe(slotStart)
+
+  const spans = buildVisibleCubeSpans(
+    [{ start: buffer.getSectionDrawStart('c')!, count: 1 }],
+    buffer.getHighWatermark(),
+  )
+  expect(spans[0]?.start).toBe(move!.oldStart)
 
   buffer.dispose()
   mat.dispose()

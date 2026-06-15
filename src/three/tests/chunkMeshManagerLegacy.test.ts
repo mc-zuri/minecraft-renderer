@@ -175,11 +175,11 @@ test('ChunkMeshManager: hidden section excluded from draw spans', () => {
   camera.lookAt(8, 8, 8)
   camera.updateMatrixWorld()
 
-  manager.updateLegacySectionCullAndSort(camera, 8, 8, 20)
+  manager.updateSectionCullAndSort(camera, 8, 8, 20)
   expect(manager.globalLegacyBlendBuffer?.mesh.geometry.groups.length).toBe(0)
 
   section.visible = true
-  manager.updateLegacySectionCullAndSort(camera, 8, 8, 20)
+  manager.updateSectionCullAndSort(camera, 8, 8, 20)
   expect(manager.globalLegacyBlendBuffer?.mesh.geometry.groups.length).toBeGreaterThan(0)
 
   manager.cleanupSection(key)

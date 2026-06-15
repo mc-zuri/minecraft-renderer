@@ -1,7 +1,30 @@
 import * as THREE from 'three'
+import type { CubeDrawSpan } from './cubeDrawSpans'
+import {
+  createCubeMultiDrawScratch,
+  detectMultiDrawCaps,
+  drawCubeSpans,
+  logMultiDrawTierOnce,
+  type CubeMultiDrawScratch,
+  type MultiDrawCaps,
+} from './cubeMultiDraw'
 import { VERTICES_PER_FACE, computeSectionOriginRel } from './shaders/cubeBlockShader'
 import { computeCameraRelativeUniforms, type RenderOrigin } from './shaders/legacyBlockShader'
 import { packWord2Empty } from '../wasm-mesher/bridge/shaderCubeBridge'
+
+type WebGLRendererInternals = THREE.WebGLRenderer & {
+  properties: {
+    get: (material: THREE.Material) => { currentProgram: { program: WebGLProgram } }
+  }
+}
+
+type TierCAttrBinding = { loc: number, buffer: WebGLBuffer }
+type TierCAttrState = {
+  w0: TierCAttrBinding
+  w1: TierCAttrBinding
+  w2: TierCAttrBinding
+  w3: TierCAttrBinding
+}
 
 // Linear growth (NOT doubling) to keep iOS allocation spikes bounded to one increment.
 // Reference: prismarine-web-client PR #90 (webgl) and #120 (webgpu) both grow by +1M faces.
@@ -35,6 +58,13 @@ export class GlobalBlockBuffer {
   private highWatermark = 0
   private pendingRanges: Array<{ start: number, end: number }> = []
   private pendingMove: PendingMove | null = null
+  private visibleSpans: CubeDrawSpan[] = []
+  private readonly _drawScratch: CubeMultiDrawScratch = createCubeMultiDrawScratch()
+  private multiDrawCaps: MultiDrawCaps | null = null
+  private tierCVao: WebGLVertexArrayObject | null = null
+  private tierCAttrs: TierCAttrState | null = null
+  private tierCGl: WebGL2RenderingContext | null = null
+  private debugOverlay = false
 
   constructor (
     material: THREE.ShaderMaterial,
@@ -70,6 +100,73 @@ export class GlobalBlockBuffer {
     this.mesh.matrix.identity()
     this.mesh.position.set(0, 0, 0)
     scene.add(this.mesh)
+
+    this.mesh.onAfterRender = (renderer, _scene, _camera, _geometry, material) => {
+      if (this.visibleSpans.length === 0) return
+      const shaderMaterial = material as THREE.ShaderMaterial
+      const gl = renderer.getContext() as WebGL2RenderingContext
+      if (!this.multiDrawCaps) {
+        this.multiDrawCaps = detectMultiDrawCaps(gl)
+        logMultiDrawTierOnce(this.multiDrawCaps.tier, this.debugOverlay)
+      }
+      drawCubeSpans(
+        gl,
+        this.multiDrawCaps,
+        this.visibleSpans,
+        this._drawScratch,
+        this.multiDrawCaps.tier === 'C'
+          ? (g, spans) => this.drawTierCSpans(g, spans, renderer, shaderMaterial)
+          : undefined,
+      )
+    }
+  }
+
+  setDebugOverlay (enabled: boolean): void {
+    this.debugOverlay = enabled
+  }
+
+  /**
+   * Suppress three's full-buffer instanced draw; onAfterRender issues visible spans only.
+   * setDrawRange(0,0) skips bindingStates.setup in r0.184 — use 6 verts + instanceCount=0
+   * so program/VAO stay bound while renderInstances no-ops at primcount===0.
+   */
+  suppressThreeDraw (): void {
+    const geometry = this.mesh.geometry
+    geometry.setDrawRange(0, VERTICES_PER_FACE)
+    geometry.instanceCount = 0
+  }
+
+  setVisibleSpans (spans: CubeDrawSpan[]): void {
+    this.visibleSpans = spans
+  }
+
+  getVisibleSpans (): readonly CubeDrawSpan[] {
+    return this.visibleSpans
+  }
+
+  forEachSectionSlot (cb: (key: string, slot: { start: number, count: number }) => void): void {
+    for (const [key, slot] of this.sectionSlots) {
+      cb(key, slot)
+    }
+  }
+
+  getSectionDrawStart (sectionKey: string): number | undefined {
+    const slot = this.sectionSlots.get(sectionKey)
+    if (!slot) return undefined
+    if (this.pendingMove?.key === sectionKey) return this.pendingMove.oldStart
+    return slot.start
+  }
+
+  getHighWatermark (): number {
+    return this.highWatermark
+  }
+
+  hasPendingUploads (): boolean {
+    return this.pendingRanges.length > 0
+  }
+
+  getPendingMove (): PendingMove | null {
+    return this.pendingMove
   }
 
   addSection (sectionKey: string, words: Uint32Array, faceCount: number): void {
@@ -245,17 +342,112 @@ export class GlobalBlockBuffer {
     this.highWatermark = 0
     this.pendingRanges.length = 0
     this.pendingMove = null
+    this.visibleSpans = []
     this.w0.fill(0)
     this.w1.fill(0)
     this.w2.fill(EMPTY_W2)
     this.w3.fill(0)
     this.mesh.geometry.instanceCount = 0
+    this.invalidateTierCVao()
   }
 
   dispose (): void {
+    this.invalidateTierCVao()
     this.mesh.parent?.remove(this.mesh)
     this.mesh.geometry.dispose()
     this.reset()
+  }
+
+  private invalidateTierCVao (): void {
+    if (this.tierCVao && this.tierCGl) {
+      this.tierCGl.deleteVertexArray(this.tierCVao)
+    }
+    this.tierCVao = null
+    this.tierCAttrs = null
+  }
+
+  private drawTierCSpans (
+    gl: WebGL2RenderingContext,
+    spans: readonly CubeDrawSpan[],
+    renderer: THREE.WebGLRenderer,
+    material: THREE.ShaderMaterial,
+  ): void {
+    this.ensureTierCVao(gl, renderer, material)
+    if (!this.tierCVao || !this.tierCAttrs) return
+
+    const attrs = this.tierCAttrs
+    gl.bindVertexArray(this.tierCVao)
+    for (const span of spans) {
+      const byteOffset = span.start * 4
+      const repointWord = (binding: TierCAttrBinding) => {
+        gl.bindBuffer(gl.ARRAY_BUFFER, binding.buffer)
+        gl.vertexAttribIPointer(binding.loc, 1, gl.UNSIGNED_INT, 4, byteOffset)
+      }
+      repointWord(attrs.w0)
+      repointWord(attrs.w1)
+      repointWord(attrs.w2)
+      repointWord(attrs.w3)
+      gl.drawArraysInstanced(gl.TRIANGLES, 0, VERTICES_PER_FACE, span.count)
+    }
+    gl.bindVertexArray(null)
+  }
+
+  private ensureTierCVao (
+    gl: WebGL2RenderingContext,
+    renderer: THREE.WebGLRenderer,
+    material: THREE.ShaderMaterial,
+  ): void {
+    this.tierCGl = gl
+    const internals = renderer as WebGLRendererInternals
+    const materialProps = internals.properties.get(material) as { currentProgram: { program: WebGLProgram } }
+    const program = materialProps.currentProgram.program
+
+    const w0Loc = gl.getAttribLocation(program, 'a_w0')
+    const w1Loc = gl.getAttribLocation(program, 'a_w1')
+    const w2Loc = gl.getAttribLocation(program, 'a_w2')
+    const w3Loc = gl.getAttribLocation(program, 'a_w3')
+
+    const readBoundBuffer = (loc: number): WebGLBuffer | null => {
+      if (loc < 0) return null
+      return gl.getVertexAttrib(loc, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING) as WebGLBuffer | null
+    }
+
+    const liveW0 = readBoundBuffer(w0Loc)
+    if (this.tierCVao && this.tierCAttrs && liveW0 && this.tierCAttrs.w0.buffer !== liveW0) {
+      this.invalidateTierCVao()
+    }
+    if (this.tierCVao) return
+
+    const w0Buf = readBoundBuffer(w0Loc)
+    const w1Buf = readBoundBuffer(w1Loc)
+    const w2Buf = readBoundBuffer(w2Loc)
+    const w3Buf = readBoundBuffer(w3Loc)
+    if (!w0Buf || !w1Buf || !w2Buf || !w3Buf) return
+
+    const vao = gl.createVertexArray()
+    if (!vao) return
+
+    gl.bindVertexArray(vao)
+
+    const bindInstancedWord = (loc: number, buffer: WebGLBuffer) => {
+      gl.enableVertexAttribArray(loc)
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
+      gl.vertexAttribIPointer(loc, 1, gl.UNSIGNED_INT, 4, 0)
+      gl.vertexAttribDivisor(loc, 1)
+    }
+    bindInstancedWord(w0Loc, w0Buf)
+    bindInstancedWord(w1Loc, w1Buf)
+    bindInstancedWord(w2Loc, w2Buf)
+    bindInstancedWord(w3Loc, w3Buf)
+
+    gl.bindVertexArray(null)
+    this.tierCVao = vao
+    this.tierCAttrs = {
+      w0: { loc: w0Loc, buffer: w0Buf },
+      w1: { loc: w1Loc, buffer: w1Buf },
+      w2: { loc: w2Loc, buffer: w2Buf },
+      w3: { loc: w3Loc, buffer: w3Buf },
+    }
   }
 
   private markDirty (start: number, end: number): void {
@@ -464,5 +656,6 @@ export class GlobalBlockBuffer {
     mkAttr(this.w3, 'a_w3')
 
     this.pendingRanges.length = 0
+    this.invalidateTierCVao()
   }
 }

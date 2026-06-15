@@ -1310,24 +1310,32 @@ export class WorldRendererThree extends WorldRendererCommon {
     const globalBuffer = this.chunkMeshManager.globalBlockBuffer
     if (globalBuffer) {
       globalBuffer.setCameraOrigin(renderOrigin, camX, camY, camZ)
+      globalBuffer.setDebugOverlay(this.displayOptions.inWorldRenderingConfig.enableDebugOverlay)
       globalBuffer.compactStep()
-      globalBuffer.uploadDirtyRange()
+      if (globalBuffer.hasPendingUploads()) {
+        globalBuffer.uploadDirtyRange()
+      }
+      globalBuffer.suppressThreeDraw()
     }
     const globalLegacyBuffer = this.chunkMeshManager.globalLegacyBuffer
-    if (globalLegacyBuffer) {
+    if (globalLegacyBuffer?.hasPendingUploads()) {
       globalLegacyBuffer.uploadDirtyRange()
     }
     const globalLegacyBlendBuffer = this.chunkMeshManager.globalLegacyBlendBuffer
-    if (globalLegacyBlendBuffer) {
+    if (globalLegacyBlendBuffer?.hasPendingUploads()) {
       globalLegacyBlendBuffer.uploadDirtyRange()
     }
     this.chunkMeshManager.setLegacyCameraOrigin(camX, camY, camZ)
-    this.chunkMeshManager.updateLegacySectionCullAndSort(
-      cam,
-      this.cameraWorldPos.x,
-      this.cameraWorldPos.y,
-      this.cameraWorldPos.z,
-    )
+    this.chunkMeshManager.updateCullDirtyFromCamera(cam, camX, camY, camZ)
+    if (this.chunkMeshManager.cullDirty) {
+      this.chunkMeshManager.updateSectionCullAndSort(
+        cam,
+        this.cameraWorldPos.x,
+        this.cameraWorldPos.y,
+        this.cameraWorldPos.z,
+      )
+      this.chunkMeshManager.clearCullDirty()
+    }
     this.renderer.render(this.scene, cam)
 
     if (

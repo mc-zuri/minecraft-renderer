@@ -9,6 +9,7 @@ import { computeCameraRelativeUniforms, createGlobalLegacyBlendMaterial, createG
 import { LEGACY_SECTION_HALF_EXTENT, sectionIntersectsFrustum, setupLegacySectionMatrix, updateLegacySectionCullState } from './legacySectionCull'
 import { createShaderCubeMesh, disposeShaderCubeMesh } from './shaderCubeMesh'
 import { GlobalBlockBuffer } from './globalBlockBuffer'
+import { buildVisibleCubeSpans } from './cubeDrawSpans'
 import { GlobalLegacyBuffer, type LegacySectionGeometry } from './globalLegacyBuffer'
 import {
   computeShaderSectionRaycastAabb,
@@ -123,6 +124,12 @@ export class ChunkMeshManager {
   private readonly _legacyCullBoxMin = new THREE.Vector3()
   private readonly _legacyCullBoxMax = new THREE.Vector3()
   private readonly _visibleSectionSpans: Array<{ key: string, distSq: number }> = []
+  /** Drives per-frame cull + span rebuild; cleared after updateSectionCullAndSort. */
+  cullDirty = true
+  private readonly _lastCullCamPos = new THREE.Vector3()
+  private readonly _lastCullCamQuat = new THREE.Quaternion()
+  private readonly _cullViewQuat = new THREE.Quaternion()
+  private _cullCamInitialized = false
   /** One instanced mesh for all shader-cube faces (single draw call). */
   globalBlockBuffer: GlobalBlockBuffer | null = null
   globalLegacyBuffer: GlobalLegacyBuffer | null = null
@@ -337,10 +344,9 @@ export class ChunkMeshManager {
   }
 
   /**
-   * Shared section visibility + span groups for global legacy buffers.
-   * Visible list is also the T3-ready interface for cube-buffer draw culling (not wired here).
+   * Shared section visibility + span groups for global legacy and cube buffers.
    */
-  updateLegacySectionCullAndSort (camera: THREE.Camera, cameraWorldX: number, cameraWorldY: number, cameraWorldZ: number): void {
+  updateSectionCullAndSort (camera: THREE.Camera, cameraWorldX: number, cameraWorldY: number, cameraWorldZ: number): void {
     this._legacyCullProjScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
     this._legacyCullFrustum.setFromProjectionMatrix(this._legacyCullProjScreen)
 
@@ -369,6 +375,38 @@ export class ChunkMeshManager {
     this.globalLegacyBuffer?.updateDrawSpans(visible, 'opaque')
     this.globalLegacyBlendBuffer?.updateDrawSpans(visible, 'sortedBlend')
 
+    const gb = this.globalBlockBuffer
+    if (gb) {
+      const visibleSlots: Array<{ start: number, count: number }> = []
+      gb.forEachSectionSlot((key, slot) => {
+        const entry = this.shaderSectionRaycastBoxes.get(key)
+        if (!entry) {
+          return
+        }
+        const { visible: inFrustum } = sectionIntersectsFrustum(
+          entry.sectionCenterX,
+          entry.sectionCenterY,
+          entry.sectionCenterZ,
+          cameraWorldX,
+          cameraWorldY,
+          cameraWorldZ,
+          this._legacyCullFrustum,
+          this._legacyCullBox,
+          this._legacyCullBoxMin,
+          this._legacyCullBoxMax,
+        )
+        if (!inFrustum) {
+          return
+        }
+        const drawStart = gb.getSectionDrawStart(key)
+        if (drawStart !== undefined) {
+          visibleSlots.push({ start: drawStart, count: slot.count })
+        }
+      })
+      const spans = buildVisibleCubeSpans(visibleSlots, gb.getHighWatermark())
+      gb.setVisibleSpans(spans)
+    }
+
     for (const poolEntry of this.activeSections.values()) {
       const sectionKey = poolEntry.sectionKey
       if (!sectionKey) continue
@@ -389,6 +427,40 @@ export class ChunkMeshManager {
         this._legacyCullBoxMax,
       )
     }
+  }
+
+  markCullDirty (): void {
+    this.cullDirty = true
+  }
+
+  /** Compare camera pose; mark cull dirty when position or rotation changed. */
+  updateCullDirtyFromCamera (camera: THREE.Camera, cameraWorldX: number, cameraWorldY: number, cameraWorldZ: number): void {
+    camera.getWorldQuaternion(this._cullViewQuat)
+    if (!this._cullCamInitialized) {
+      this._lastCullCamPos.set(cameraWorldX, cameraWorldY, cameraWorldZ)
+      this._lastCullCamQuat.copy(this._cullViewQuat)
+      this._cullCamInitialized = true
+      this.cullDirty = true
+      return
+    }
+    const posChanged =
+      this._lastCullCamPos.x !== cameraWorldX ||
+      this._lastCullCamPos.y !== cameraWorldY ||
+      this._lastCullCamPos.z !== cameraWorldZ
+    const quatChanged =
+      this._lastCullCamQuat.x !== this._cullViewQuat.x ||
+      this._lastCullCamQuat.y !== this._cullViewQuat.y ||
+      this._lastCullCamQuat.z !== this._cullViewQuat.z ||
+      this._lastCullCamQuat.w !== this._cullViewQuat.w
+    if (posChanged || quatChanged) {
+      this._lastCullCamPos.set(cameraWorldX, cameraWorldY, cameraWorldZ)
+      this._lastCullCamQuat.copy(this._cullViewQuat)
+      this.markCullDirty()
+    }
+  }
+
+  clearCullDirty (): void {
+    this.cullDirty = false
   }
 
   setLegacyCameraOrigin (x: number, y: number, z: number): void {
@@ -466,6 +538,7 @@ export class ChunkMeshManager {
 
     const global = this.getGlobalBlockBuffer()
     global?.addSection(sectionKey, words, count)
+    this.markCullDirty()
 
     const hadShaderAsPrimary = section.mesh === (section.shaderMesh as unknown as THREE.Mesh | undefined)
     if (section.shaderMesh) {
@@ -529,6 +602,7 @@ export class ChunkMeshManager {
         section.mesh = section.shaderMesh as unknown as THREE.Mesh<THREE.BufferGeometry, THREE.Material> | undefined ?? undefined
       }
     }
+    this.markCullDirty()
   }
 
   raycastGlobalLegacySections (
@@ -1009,6 +1083,7 @@ export class ChunkMeshManager {
       if (!list.includes(sectionKey)) list.push(sectionKey)
     }
 
+    this.markCullDirty()
     return sectionObject
   }
 
@@ -1211,6 +1286,7 @@ export class ChunkMeshManager {
       this.globalLegacyBuffer?.removeSection(sectionKey)
       this.globalLegacyBlendBuffer?.removeSection(sectionKey)
       this.unregisterShaderSectionRaycastBox(sectionKey)
+      this.markCullDirty()
       delete sectionObject.deferredLegacyOpaque
       delete sectionObject.deferredLegacyBlend
       if (sectionObject.shaderMesh) {
