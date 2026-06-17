@@ -7,6 +7,7 @@ import { worldColumnKey, World } from '../../mesher-shared/world'
 import { handleGetHeightmap, EMPTY_COLUMN_HEIGHTMAP_SENTINEL } from '../../mesher-shared/computeHeightmap'
 import { collectBlockEntityMetadata, type SignMeta, type HeadMeta, type BannerMeta } from '../../mesher-shared/blockEntityMetadata'
 import { SectionRequestTracker } from './mesherWasmRequestTracker'
+import { sectionYsForLightColumnDirty } from './mesherWasmLightDirty'
 import {
   CONVERSION_CACHE_LIMIT,
   clearConversionCache,
@@ -41,11 +42,13 @@ function processUpdateLightV17 (rawPacket: Uint8Array, numSections: number): voi
     const parsed: any = (wasm as any).parseUpdateLightV17(rawPacket, numSections)
     const x = (parsed.x as number) * 16
     const z = (parsed.z as number) * 16
+    const skyLight = parsed.skyLight as Uint8Array
     updateLightV17Cache.set(rawCacheKey(x, z), {
-      skyLight: parsed.skyLight as Uint8Array,
+      skyLight,
       blockLight: parsed.blockLight as Uint8Array,
     })
     invalidateConversion(x, z)
+    dirtyColumnSectionsForLightUpdate(x, z)
   } catch (err) {
     console.warn('[WASM Mesher] parseUpdateLightV17 failed:', err)
   }
@@ -70,6 +73,7 @@ function processUpdateLightV16 (rawPacket: Uint8Array): void {
       blockLight: parsed.blockLight as Uint8Array,
     })
     invalidateConversion(x, z)
+    dirtyColumnSectionsForLightUpdate(x, z)
   } catch (err) {
     console.warn('[WASM Mesher] parseUpdateLightV17 (v16) failed:', err)
   }
@@ -95,7 +99,10 @@ async function initWasm() {
       for (const item of queue) processUpdateLightV16(item.rawPacket)
     }
   } catch (err) {
-    console.error('Failed to initialize WASM mesher:', err)
+    console.error(
+      '[WASM Mesher] Failed to initialize WASM mesher — block lighting may stay at full brightness:',
+      err,
+    )
     wasmInitialized = true // Don't try to initialize again
     // Don't throw - allow worker to continue without WASM (will fail on first use)
   }
@@ -193,6 +200,15 @@ function setSectionDirty(pos: Vec3, value = true) {
     // Missing chunks still owe the main thread a sectionFinished response.
     requestTracker.addRequest(key)
     emitSectionFinished({ type: 'sectionFinished', key, workerIndex })
+  }
+}
+
+/** Re-mesh every section in a column after `update_light` updates the light cache. */
+function dirtyColumnSectionsForLightUpdate (x: number, z: number) {
+  const worldMinY = config?.worldMinY ?? 0
+  const worldMaxY = config?.worldMaxY ?? 256
+  for (const y of sectionYsForLightColumnDirty(worldMinY, worldMaxY, SECTION_HEIGHT)) {
+    setSectionDirty(new Vec3(x, y, z))
   }
 }
 
@@ -341,7 +357,7 @@ const convertParsedV17ToWasm = (
   } else {
     blockLight = new Uint8Array(totalBlocks)
     skyLight = new Uint8Array(totalBlocks)
-    skyLight.fill(15)
+    skyLight.fill(config?.skyLight ?? 15)
   }
   const biomesArray: Uint8Array = parsed.biomes
   let blockCount = 0
@@ -407,7 +423,7 @@ const convertParsedV16ToWasm = (
   } else {
     blockLight = new Uint8Array(totalBlocks)
     skyLight = new Uint8Array(totalBlocks)
-    skyLight.fill(15)
+    skyLight.fill(config?.skyLight ?? 15)
   }
   const biomesArray: Uint8Array = parsed.biomes
   let blockCount = 0
@@ -466,7 +482,7 @@ const meshColumnFromRawV18Plus = (
       meta.occludingBlocks,
       config?.enableLighting !== false,
       config?.smoothLighting !== false,
-      config?.skyLight || 15
+      config?.skyLight ?? 15
     )
   } catch (err) {
     console.warn('[WASM Mesher] generateGeometryFromMapChunkV18Plus failed, falling back:', err)
@@ -512,7 +528,7 @@ const meshColumnFromParsedV16V17 = (
       meta.occludingBlocks,
       config?.enableLighting !== false,
       config?.smoothLighting !== false,
-      config?.skyLight || 15
+      config?.skyLight ?? 15
     )
   } catch (err) {
     console.warn('[WASM Mesher] generateGeometryFromParsedV16V17 failed, falling back:', err)
@@ -573,7 +589,7 @@ const meshMultiColumnsFromRawV18Plus = (
       meta.occludingBlocks,
       config?.enableLighting !== false,
       config?.smoothLighting !== false,
-      config?.skyLight || 15
+      config?.skyLight ?? 15
     )
   } catch (err) {
     console.warn('[WASM Mesher] generateGeometryFromMapChunkV18PlusMulti failed:', err)
@@ -673,7 +689,7 @@ const meshMultiColumnsFromParsedV16V17 = (
       meta.occludingBlocks,
       config?.enableLighting !== false,
       config?.smoothLighting !== false,
-      config?.skyLight || 15
+      config?.skyLight ?? 15
     )
   } catch (err) {
     console.warn('[WASM Mesher] generateGeometryFromParsedV16V17Multi failed:', err)
@@ -977,6 +993,8 @@ function makeEmptyColumnGeometry(sx: number, sy: number, sz: number, sectionHeig
     positions: new Float32Array(0),
     normals: new Float32Array(0),
     colors: new Float32Array(0),
+    skyLights: new Float32Array(0),
+    blockLights: new Float32Array(0),
     uvs: new Float32Array(0),
     indices: new Uint32Array(0),
     indicesCount: 0,
@@ -1034,6 +1052,7 @@ function processColumnTick() {
     let preCacheHits = 0
     let preCacheMisses = 0
     let hadError = false
+    let columnMeshPath = 'none'
     // Outer-scope timestamps so we can finalize `processTime` and
     // `postPhase` AFTER the per-section emit loop runs (the loop builds
     // typed arrays, walks block-entity metadata, and calls postMessage —
@@ -1053,6 +1072,7 @@ function processColumnTick() {
         let wasmResult: any
         let t1 = 0
         let usedFusedPath = false
+        columnMeshPath = 'none'
 
         const meta = getBlockMeta(version)
 
@@ -1068,6 +1088,7 @@ function processColumnTick() {
 
           if (rawEntry) {
             wasmResult = meshColumnFromRawV18Plus(rawEntry, x, z, worldMinY, worldMaxY, meta)
+            if (wasmResult) columnMeshPath = 'v18_fused'
           } else if (v17Entry) {
             const v17Light = updateLightV17Cache.get(rawCacheKey(x, z))
             wasmResult = meshColumnFromParsedV16V17(
@@ -1076,6 +1097,7 @@ function processColumnTick() {
               v17Light?.skyLight ?? null, v17Light?.blockLight ?? null,
               x, z, worldMinY, worldMaxY, meta
             )
+            if (wasmResult) columnMeshPath = 'v17_fused'
           } else if (v16Entry) {
             const v16Light = updateLightV16Cache.get(rawCacheKey(x, z))
             const bitMapLoHi = new Uint32Array([v16Entry.bitMap >>> 0, 0])
@@ -1085,6 +1107,7 @@ function processColumnTick() {
               v16Light?.skyLight ?? null, v16Light?.blockLight ?? null,
               x, z, worldMinY, worldMaxY, meta
             )
+            if (wasmResult) columnMeshPath = 'v16_fused'
           }
 
           if (wasmResult) {
@@ -1105,6 +1128,7 @@ function processColumnTick() {
           wasmResult = meshMultiColumnsFromRawV18Plus(chunksToUse, x, z, worldMinY, worldMaxY, meta)
                     ?? meshMultiColumnsFromParsedV16V17(chunksToUse, x, z, worldMinY, worldMaxY, meta)
           if (wasmResult) {
+            columnMeshPath = 'multi_fused'
             usedFusedPath = true
             t1 = performance.now()
             wasmPhase = t1 - t0
@@ -1182,8 +1206,9 @@ function processColumnTick() {
               invisibleBlocks, transparentBlocks, noAoBlocks, cullIdenticalBlocks, occludingBlocks,
               config?.enableLighting !== false,
               config?.smoothLighting !== false,
-              config?.skyLight || 15
+              config?.skyLight ?? 15
             )
+            columnMeshPath = 'two_step_single'
           } else {
             const tBuildStart = performance.now()
             const perChunkLen = conversions[0].blockStates.length
@@ -1215,8 +1240,9 @@ function processColumnTick() {
               invisibleBlocks, transparentBlocks, noAoBlocks, cullIdenticalBlocks, occludingBlocks,
               config?.enableLighting !== false,
               config?.smoothLighting !== false,
-              config?.skyLight || 15
+              config?.skyLight ?? 15
             )
+            columnMeshPath = 'two_step_multi'
           }
         }
 
@@ -1307,7 +1333,7 @@ function processColumnTick() {
             for (cursor.x = sx; cursor.x < sx + 16; cursor.x++) {
               const b = world.getBlock(cursor)
               if (!b) continue
-              collectBlockEntityMetadata(b, cursor.x, cursor.y, cursor.z, beTarget, beOpts)
+              collectBlockEntityMetadata(b, cursor.x, cursor.y, cursor.z, beTarget, beOpts, world)
             }
           }
         }
@@ -1338,6 +1364,8 @@ function processColumnTick() {
             positions: new Float32Array(exported.geometry.positions),
             normals: new Float32Array(exported.geometry.normals),
             colors: new Float32Array(exported.geometry.colors),
+            skyLights: new Float32Array(exported.geometry.skyLights),
+            blockLights: new Float32Array(exported.geometry.blockLights),
             uvs: new Float32Array(exported.geometry.uvs),
             indices: using32Array
               ? new Uint32Array(exported.geometry.indices)
@@ -1369,6 +1397,8 @@ function processColumnTick() {
               positions: new Float32Array(exported.blendGeometry.positions),
               normals: new Float32Array(exported.blendGeometry.normals),
               colors: new Float32Array(exported.blendGeometry.colors),
+              skyLights: new Float32Array(exported.blendGeometry.skyLights),
+              blockLights: new Float32Array(exported.blendGeometry.blockLights),
               uvs: new Float32Array(exported.blendGeometry.uvs),
               indices: blendMax > 65535
                 ? new Uint32Array(exported.blendGeometry.indices)
@@ -1379,12 +1409,16 @@ function processColumnTick() {
             geometry.positions?.buffer,
             geometry.normals?.buffer,
             geometry.colors?.buffer,
+            geometry.skyLights?.buffer,
+            geometry.blockLights?.buffer,
             geometry.uvs?.buffer,
             //@ts-ignore
             geometry.indices?.buffer,
             geometry.blend?.positions?.buffer,
             geometry.blend?.normals?.buffer,
             geometry.blend?.colors?.buffer,
+            geometry.blend?.skyLights?.buffer,
+            geometry.blend?.blockLights?.buffer,
             geometry.blend?.uvs?.buffer,
             //@ts-ignore
             geometry.blend?.indices?.buffer,

@@ -1,8 +1,10 @@
 import * as THREE from 'three'
 import type { WorldRendererThree } from './worldRendererThree'
 import type { ExportedSection, ExportedWorldGeometry } from '../mesher-shared/exportedGeometryTypes'
+import { calculateSkyLightSimple } from '../lib/skyLight'
+import { bakeLegacyVertexColors } from '../lib/bakeLegacyLight'
 import { getShaderCubeResources } from '../wasm-mesher/bridge/shaderCubeBridge'
-import { createCubeBlockMaterial } from './shaders/cubeBlockShader'
+import { createCubeBlockMaterial, setCubeSkyLevel } from './shaders/cubeBlockShader'
 import { createShaderCubeMesh } from './shaderCubeMesh'
 
 export type { ExportedSection, ExportedWorldGeometry } from '../mesher-shared/exportedGeometryTypes'
@@ -19,6 +21,7 @@ export function exportWorldGeometry(
   includeTexture = false
 ): ExportedWorldGeometry {
   const sections: ExportedSection[] = []
+  const skyLevel = calculateSkyLightSimple(worldRenderer.timeOfTheDay) / 15
 
   const globalLegacy = worldRenderer.chunkMeshManager.globalLegacyBuffer
 
@@ -26,13 +29,17 @@ export function exportWorldGeometry(
     const positions: number[] = []
     const normals: number[] = []
     const colors: number[] = []
+    const skyLights: number[] = []
+    const blockLights: number[] = []
     const uvs: number[] = []
     const indices: number[] = []
 
     const globalSlot = globalLegacy?.getSectionGeometryData(key)
     if (globalSlot) {
       positions.push(...globalSlot.positions)
-      colors.push(...globalSlot.colors)
+      colors.push(...bakeLegacyVertexColors(globalSlot.colors, globalSlot.skyLights, globalSlot.blockLights, skyLevel))
+      skyLights.push(...globalSlot.skyLights)
+      blockLights.push(...globalSlot.blockLights)
       uvs.push(...globalSlot.uvs)
       indices.push(...globalSlot.indices)
     }
@@ -43,13 +50,25 @@ export function exportWorldGeometry(
       const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute
       const normalAttr = geometry.getAttribute('normal') as THREE.BufferAttribute
       const colorAttr = geometry.getAttribute('color') as THREE.BufferAttribute
+      const skyAttr = geometry.getAttribute('a_skyLight') as THREE.BufferAttribute | undefined
+      const blockAttr = geometry.getAttribute('a_blockLight') as THREE.BufferAttribute | undefined
       const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute
       const indexAttr = geometry.index
-      if (positionAttr && indexAttr) {
+      if (positionAttr && indexAttr && colorAttr) {
         const vertOffset = positions.length / 3
+        const vertCount = positionAttr.count
+        const rawColors = Array.from(colorAttr.array as Float32Array)
+        const rawSky = skyAttr
+          ? Array.from(skyAttr.array as Float32Array)
+          : new Array(vertCount).fill(1)
+        const rawBlock = blockAttr
+          ? Array.from(blockAttr.array as Float32Array)
+          : new Array(vertCount).fill(0)
         positions.push(...Array.from(positionAttr.array))
         if (normalAttr) normals.push(...Array.from(normalAttr.array))
-        if (colorAttr) colors.push(...Array.from(colorAttr.array))
+        colors.push(...bakeLegacyVertexColors(rawColors, rawSky, rawBlock, skyLevel))
+        skyLights.push(...rawSky)
+        blockLights.push(...rawBlock)
         if (uvAttr) uvs.push(...Array.from(uvAttr.array))
         for (const idx of Array.from(indexAttr.array)) {
           indices.push(idx + vertOffset)
@@ -70,6 +89,8 @@ export function exportWorldGeometry(
         positions,
         normals,
         colors,
+        skyLights,
+        blockLights,
         uvs,
         indices,
       },
@@ -141,12 +162,13 @@ export async function loadWorldGeometryFromUrl(url: string): Promise<ExportedWor
  * Recreate THREE.js meshes from exported geometry
  * Returns an array of mesh groups that can be added to a scene
  */
-function shaderMaterialForExport(legacyMaterial: THREE.Material): THREE.ShaderMaterial | null {
+function shaderMaterialForExport(legacyMaterial: THREE.Material, skyLevel: number): THREE.ShaderMaterial | null {
   const atlas = (legacyMaterial as THREE.MeshBasicMaterial).map
     ?? (legacyMaterial as THREE.MeshLambertMaterial).map
   if (!atlas) return null
   const shaderMat = createCubeBlockMaterial()
   shaderMat.uniforms.u_atlas.value = atlas
+  setCubeSkyLevel(shaderMat, skyLevel)
   const resources = getShaderCubeResources()
   if (!resources) return null
   const { tintPalette } = resources
@@ -159,9 +181,10 @@ export function createMeshesFromExport(
   exportData: ExportedWorldGeometry,
   material: THREE.Material,
   shaderMaterial?: THREE.ShaderMaterial | null,
+  skyLevel = 1,
 ): THREE.Group[] {
   const groups: THREE.Group[] = []
-  const resolvedShaderMat = shaderMaterial ?? shaderMaterialForExport(material)
+  const resolvedShaderMat = shaderMaterial ?? shaderMaterialForExport(material, skyLevel)
 
   for (const section of exportData.sections) {
     const group = new THREE.Group()
@@ -175,7 +198,15 @@ export function createMeshesFromExport(
         geometry.setAttribute('normal', new THREE.Float32BufferAttribute(section.geometry.normals, 3))
       }
       if (section.geometry.colors.length) {
-        geometry.setAttribute('color', new THREE.Float32BufferAttribute(section.geometry.colors, 3))
+        const baked = section.geometry.skyLights?.length
+          ? bakeLegacyVertexColors(
+            section.geometry.colors,
+            section.geometry.skyLights,
+            section.geometry.blockLights,
+            skyLevel,
+          )
+          : section.geometry.colors
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(baked, 3))
       }
       if (section.geometry.uvs.length) {
         geometry.setAttribute('uv', new THREE.Float32BufferAttribute(section.geometry.uvs, 2))
@@ -273,10 +304,11 @@ export async function applyWorldGeometryExport(
     material = rendererMaterial
   }
 
+  const skyLevel = calculateSkyLightSimple(worldRenderer.timeOfTheDay) / 15
   const shaderMat = exportData.sections.some(s => (s.shaderCubes?.count ?? 0) > 0)
-    ? shaderMaterialForExport(material)
+    ? shaderMaterialForExport(material, skyLevel)
     : null
-  const groups = createMeshesFromExport(exportData, material, shaderMat)
+  const groups = createMeshesFromExport(exportData, material, shaderMat, skyLevel)
   const container = new THREE.Group()
   container.name = GEOMETRY_EXPORT_GROUP_NAME
   if (hasEmbeddedTexture) {

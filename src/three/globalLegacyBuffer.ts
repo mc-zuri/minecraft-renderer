@@ -5,6 +5,7 @@ const VERTS_PER_QUAD = 4
 const INDICES_PER_QUAD = 6
 const FLOATS_PER_VERT = 3
 const FLOATS_PER_UV_VERT = 2
+const FLOATS_PER_LIGHT_VERT = 1
 
 const DEFAULT_INITIAL_CAPACITY_QUADS = 128_000
 const DEFAULT_GROWTH_INCREMENT_QUADS = 128_000
@@ -25,6 +26,8 @@ export type VisibleSectionSpan = { key: string, distSq: number }
 export type LegacySectionGeometry = {
   positions: Float32Array
   colors: Float32Array
+  skyLights: Float32Array
+  blockLights: Float32Array
   uvs: Float32Array
   indices: Uint32Array | Uint16Array
 }
@@ -47,6 +50,8 @@ export class GlobalLegacyBuffer {
   private capacityQuads: number
   private positions: Float32Array
   private colors: Float32Array
+  private skyLights: Float32Array
+  private blockLights: Float32Array
   private uvs: Float32Array
   private aOrigin: Float32Array
   private indices: Uint32Array
@@ -68,6 +73,8 @@ export class GlobalLegacyBuffer {
     const maxVerts = this.capacityQuads * VERTS_PER_QUAD
     this.positions = new Float32Array(maxVerts * FLOATS_PER_VERT)
     this.colors = new Float32Array(maxVerts * FLOATS_PER_VERT)
+    this.skyLights = new Float32Array(maxVerts * FLOATS_PER_LIGHT_VERT)
+    this.blockLights = new Float32Array(maxVerts * FLOATS_PER_LIGHT_VERT)
     this.uvs = new Float32Array(maxVerts * FLOATS_PER_UV_VERT)
     this.aOrigin = new Float32Array(maxVerts * FLOATS_PER_VERT)
     this.indices = new Uint32Array(this.capacityQuads * INDICES_PER_QUAD)
@@ -81,6 +88,8 @@ export class GlobalLegacyBuffer {
     }
     mkAttr(this.positions, FLOATS_PER_VERT, 'position')
     mkAttr(this.colors, FLOATS_PER_VERT, 'color')
+    mkAttr(this.skyLights, FLOATS_PER_LIGHT_VERT, 'a_skyLight')
+    mkAttr(this.blockLights, FLOATS_PER_LIGHT_VERT, 'a_blockLight')
     mkAttr(this.uvs, FLOATS_PER_UV_VERT, 'uv')
     mkAttr(this.aOrigin, FLOATS_PER_VERT, 'a_origin')
 
@@ -148,8 +157,11 @@ export class GlobalLegacyBuffer {
     const dstVertBase = slot.start * VERTS_PER_QUAD
     const dstFloatBase = dstVertBase * FLOATS_PER_VERT
     const dstUvBase = dstVertBase * FLOATS_PER_UV_VERT
+    const dstLightBase = dstVertBase * FLOATS_PER_LIGHT_VERT
     this.positions.set(geo.positions, dstFloatBase)
     this.colors.set(geo.colors, dstFloatBase)
+    this.skyLights.set(geo.skyLights, dstLightBase)
+    this.blockLights.set(geo.blockLights, dstLightBase)
     this.uvs.set(geo.uvs, dstUvBase)
 
     const originOff = dstFloatBase
@@ -286,8 +298,12 @@ export class GlobalLegacyBuffer {
     const dstIndexBase = slot.start * INDICES_PER_QUAD
     const indexLen = slot.count * INDICES_PER_QUAD
 
+    const dstLightBase = dstVertBase * FLOATS_PER_LIGHT_VERT
+
     const positions = this.positions.slice(dstFloatBase, dstFloatBase + vertCount * FLOATS_PER_VERT)
     const colors = this.colors.slice(dstFloatBase, dstFloatBase + vertCount * FLOATS_PER_VERT)
+    const skyLights = this.skyLights.slice(dstLightBase, dstLightBase + vertCount * FLOATS_PER_LIGHT_VERT)
+    const blockLights = this.blockLights.slice(dstLightBase, dstLightBase + vertCount * FLOATS_PER_LIGHT_VERT)
     const uvs = this.uvs.slice(dstUvBase, dstUvBase + vertCount * FLOATS_PER_UV_VERT)
     const indices = this.indices.slice(dstIndexBase, dstIndexBase + indexLen)
     const vertexBase = dstVertBase
@@ -299,7 +315,7 @@ export class GlobalLegacyBuffer {
     const sy = this.aOrigin[dstFloatBase + 1]! + this.renderOrigin.y
     const sz = this.aOrigin[dstFloatBase + 2]! + this.renderOrigin.z
 
-    return { positions, colors, uvs, indices, sx, sy, sz }
+    return { positions, colors, skyLights, blockLights, uvs, indices, sx, sy, sz }
   }
 
   removeSection (sectionKey: string): void {
@@ -344,6 +360,16 @@ export class GlobalLegacyBuffer {
     colorAttr.clearUpdateRanges()
     colorAttr.addUpdateRange(vertOffset * FLOATS_PER_VERT, vertCount * FLOATS_PER_VERT)
     colorAttr.needsUpdate = true
+
+    const skyAttr = geometry.getAttribute('a_skyLight') as THREE.BufferAttribute
+    skyAttr.clearUpdateRanges()
+    skyAttr.addUpdateRange(vertOffset * FLOATS_PER_LIGHT_VERT, vertCount * FLOATS_PER_LIGHT_VERT)
+    skyAttr.needsUpdate = true
+
+    const blockAttr = geometry.getAttribute('a_blockLight') as THREE.BufferAttribute
+    blockAttr.clearUpdateRanges()
+    blockAttr.addUpdateRange(vertOffset * FLOATS_PER_LIGHT_VERT, vertCount * FLOATS_PER_LIGHT_VERT)
+    blockAttr.needsUpdate = true
 
     const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute
     uvAttr.clearUpdateRanges()
@@ -450,7 +476,7 @@ export class GlobalLegacyBuffer {
 
   getMemoryBytes (): number {
     const verts = this.capacityQuads * VERTS_PER_QUAD
-    return verts * (FLOATS_PER_VERT * 3 + FLOATS_PER_UV_VERT) * 4
+    return verts * (FLOATS_PER_VERT * 3 + FLOATS_PER_LIGHT_VERT * 2 + FLOATS_PER_UV_VERT) * 4
       + this.capacityQuads * INDICES_PER_QUAD * 4
   }
 
@@ -548,18 +574,24 @@ export class GlobalLegacyBuffer {
 
     const nPos = new Float32Array(newMaxVerts * FLOATS_PER_VERT)
     const nCol = new Float32Array(newMaxVerts * FLOATS_PER_VERT)
+    const nSky = new Float32Array(newMaxVerts * FLOATS_PER_LIGHT_VERT)
+    const nBlock = new Float32Array(newMaxVerts * FLOATS_PER_LIGHT_VERT)
     const nUv = new Float32Array(newMaxVerts * FLOATS_PER_UV_VERT)
     const nOrigin = new Float32Array(newMaxVerts * FLOATS_PER_VERT)
     const nIdx = new Uint32Array(newCap * INDICES_PER_QUAD)
 
     nPos.set(this.positions)
     nCol.set(this.colors)
+    nSky.set(this.skyLights)
+    nBlock.set(this.blockLights)
     nUv.set(this.uvs)
     nOrigin.set(this.aOrigin)
     nIdx.set(this.indices)
 
     this.positions = nPos
     this.colors = nCol
+    this.skyLights = nSky
+    this.blockLights = nBlock
     this.uvs = nUv
     this.aOrigin = nOrigin
     this.indices = nIdx
@@ -575,6 +607,8 @@ export class GlobalLegacyBuffer {
     }
     replaceAttr(this.positions, FLOATS_PER_VERT, 'position')
     replaceAttr(this.colors, FLOATS_PER_VERT, 'color')
+    replaceAttr(this.skyLights, FLOATS_PER_LIGHT_VERT, 'a_skyLight')
+    replaceAttr(this.blockLights, FLOATS_PER_LIGHT_VERT, 'a_blockLight')
     replaceAttr(this.uvs, FLOATS_PER_UV_VERT, 'uv')
     replaceAttr(this.aOrigin, FLOATS_PER_VERT, 'a_origin')
 

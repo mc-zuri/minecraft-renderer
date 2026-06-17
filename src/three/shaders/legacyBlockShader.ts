@@ -1,4 +1,9 @@
 import * as THREE from 'three'
+import {
+  APPLY_LIGHTMAP_GLSL,
+  DEFAULT_LIGHTMAP_PARAMS,
+  type BlockLightmapParams,
+} from '../../lib/blockEntityLighting'
 
 export type RenderOrigin = { x: number, y: number, z: number }
 
@@ -31,9 +36,14 @@ precision highp float;
 uniform vec3 u_originDelta;
 uniform vec3 u_cameraOriginFrac;
 
+in float a_skyLight;
+in float a_blockLight;
+
 // position, uv, color: declared by Three.js shader chunks (vertexColors → USE_COLOR).
 out vec3 vColor;
 out vec2 v_uv;
+out float v_skyLight;
+out float v_blockLight;
 
 #ifdef USE_LOGARITHMIC_DEPTH_BUFFER
 out float vFragDepth;
@@ -50,6 +60,8 @@ void main() {
 
     vColor = color;
     v_uv = uv;
+    v_skyLight = a_skyLight;
+    v_blockLight = a_blockLight;
 
 #ifdef USE_LOGARITHMIC_DEPTH_BUFFER
     vFragDepth = 1.0 + gl_Position.w;
@@ -65,9 +77,15 @@ const fragmentShader = /* glsl */ `
 precision highp float;
 
 uniform sampler2D u_atlas;
+uniform float u_skyLevel;
+uniform float u_lightCurve;
+uniform float u_minBrightness;
+uniform float u_lightGamma;
 
 in vec3 vColor;
 in vec2 v_uv;
+in float v_skyLight;
+in float v_blockLight;
 
 #ifdef USE_LOGARITHMIC_DEPTH_BUFFER
 uniform float logDepthBufFC;
@@ -104,9 +122,13 @@ void applyFog() {
 #endif
 }
 
+${APPLY_LIGHTMAP_GLSL}
+
 void main() {
     vec4 texColor = texture(u_atlas, v_uv);
-    vec3 rgb = texColor.rgb * vColor;
+    float L = max(v_blockLight, min(v_skyLight, u_skyLevel));
+    float Lm = applyLightmap(L);
+    vec3 rgb = texColor.rgb * vColor * Lm;
     float alpha = texColor.a;
 
     if (alpha < 0.1) {
@@ -126,10 +148,14 @@ uniform vec3 u_originDelta;
 uniform vec3 u_cameraOriginFrac;
 
 in vec3 a_origin;
+in float a_skyLight;
+in float a_blockLight;
 
 // position, uv, color: declared by Three.js shader chunks (vertexColors → USE_COLOR).
 out vec3 vColor;
 out vec2 v_uv;
+out float v_skyLight;
+out float v_blockLight;
 
 #ifdef USE_LOGARITHMIC_DEPTH_BUFFER
 out float vFragDepth;
@@ -146,6 +172,8 @@ void main() {
 
     vColor = color;
     v_uv = uv;
+    v_skyLight = a_skyLight;
+    v_blockLight = a_blockLight;
 
 #ifdef USE_LOGARITHMIC_DEPTH_BUFFER
     vFragDepth = 1.0 + gl_Position.w;
@@ -157,17 +185,23 @@ void main() {
 }
 `
 
+const legacyUniforms = {
+  u_atlas: { value: null },
+  u_originDelta: { value: new THREE.Vector3() },
+  u_cameraOriginFrac: { value: new THREE.Vector3() },
+  u_skyLevel: { value: 1.0 },
+  u_lightCurve: { value: DEFAULT_LIGHTMAP_PARAMS.curve },
+  u_minBrightness: { value: DEFAULT_LIGHTMAP_PARAMS.minBrightness },
+  u_lightGamma: { value: DEFAULT_LIGHTMAP_PARAMS.gamma },
+}
+
 export function createLegacyBlockMaterial (): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
     uniforms: THREE.UniformsUtils.merge([
       THREE.UniformsLib.fog,
-      {
-        u_atlas: { value: null },
-        u_originDelta: { value: new THREE.Vector3() },
-        u_cameraOriginFrac: { value: new THREE.Vector3() },
-      },
+      legacyUniforms,
     ]),
     transparent: true,
     depthWrite: true,
@@ -185,11 +219,7 @@ export function createGlobalLegacyBlockMaterial (): THREE.ShaderMaterial {
     fragmentShader,
     uniforms: THREE.UniformsUtils.merge([
       THREE.UniformsLib.fog,
-      {
-        u_atlas: { value: null },
-        u_originDelta: { value: new THREE.Vector3() },
-        u_cameraOriginFrac: { value: new THREE.Vector3() },
-      },
+      legacyUniforms,
     ]),
     transparent: false,
     depthWrite: true,
@@ -207,11 +237,7 @@ export function createGlobalLegacyBlendMaterial (): THREE.ShaderMaterial {
     fragmentShader,
     uniforms: THREE.UniformsUtils.merge([
       THREE.UniformsLib.fog,
-      {
-        u_atlas: { value: null },
-        u_originDelta: { value: new THREE.Vector3() },
-        u_cameraOriginFrac: { value: new THREE.Vector3() },
-      },
+      legacyUniforms,
     ]),
     transparent: true,
     depthWrite: true,
@@ -238,5 +264,28 @@ export function setLegacyCameraOrigin (
   const uf = material.uniforms.u_cameraOriginFrac
   if (uf?.value?.set) {
     uf.value.set(cameraOriginFrac.x, cameraOriginFrac.y, cameraOriginFrac.z)
+  }
+}
+
+export function setLegacySkyLevel (material: THREE.ShaderMaterial, value: number): void {
+  const u = material.uniforms.u_skyLevel
+  if (u) u.value = value
+}
+
+export function setLegacyLightmapParams (
+  material: THREE.ShaderMaterial,
+  params: BlockLightmapParams,
+): void {
+  if (params.curve !== undefined) {
+    const u = material.uniforms.u_lightCurve
+    if (u) u.value = params.curve
+  }
+  if (params.minBrightness !== undefined) {
+    const u = material.uniforms.u_minBrightness
+    if (u) u.value = params.minBrightness
+  }
+  if (params.gamma !== undefined) {
+    const u = material.uniforms.u_lightGamma
+    if (u) u.value = params.gamma
   }
 }

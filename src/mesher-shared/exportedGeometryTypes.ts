@@ -7,6 +7,8 @@ export interface ExportedSection {
     positions: number[]
     normals: number[]
     colors: number[]
+    skyLights: number[]
+    blockLights: number[]
     uvs: number[]
     indices: number[]
   }
@@ -14,6 +16,8 @@ export interface ExportedSection {
     positions: number[]
     normals: number[]
     colors: number[]
+    skyLights: number[]
+    blockLights: number[]
     uvs: number[]
     indices: number[]
   }

@@ -4,8 +4,8 @@ import * as nbt from 'prismarine-nbt'
 import { Vec3 } from 'vec3'
 import { MesherGeometryOutput } from '../mesher-shared/shared'
 import { getShaderCubeResources, SHADER_CUBES_WORDS_PER_FACE } from '../wasm-mesher/bridge/shaderCubeBridge'
-import { createCubeBlockMaterial, computeSectionOriginRel } from './shaders/cubeBlockShader'
-import { computeCameraRelativeUniforms, createGlobalLegacyBlendMaterial, createGlobalLegacyBlockMaterial, createLegacyBlockMaterial, setLegacyCameraOrigin, type RenderOrigin } from './shaders/legacyBlockShader'
+import { createCubeBlockMaterial, computeSectionOriginRel, setCubeSkyLevel, setCubeLightmapParams, type BlockLightmapParams } from './shaders/cubeBlockShader'
+import { computeCameraRelativeUniforms, createGlobalLegacyBlendMaterial, createGlobalLegacyBlockMaterial, createLegacyBlockMaterial, setLegacyCameraOrigin, setLegacySkyLevel, setLegacyLightmapParams, type RenderOrigin } from './shaders/legacyBlockShader'
 import { LEGACY_SECTION_HALF_EXTENT, sectionIntersectsFrustum, setupLegacySectionMatrix, updateLegacySectionCullState } from './legacySectionCull'
 import { createShaderCubeMesh, disposeShaderCubeMesh } from './shaderCubeMesh'
 import { GlobalBlockBuffer } from './globalBlockBuffer'
@@ -26,6 +26,7 @@ import type { WorldRendererThree } from './worldRendererThree'
 import { armorModel } from './entity/armorModels'
 import { disposeObject } from './threeJsUtils'
 import { getBannerTexture, createBannerMesh, releaseBannerTexture } from './bannerRenderer'
+import { BlockEntityLightRegistry } from '../lib/blockEntityLightRegistry'
 
 export interface ChunkMeshPool {
   mesh: THREE.Mesh
@@ -105,6 +106,7 @@ export class ChunkMeshManager {
   private maxPoolSize!: number
   private minPoolSize!: number
   private readonly signHeadsRenderer: SignHeadsRenderer
+  private readonly blockEntityLightRegistry = new BlockEntityLightRegistry()
   /**
    * Shared transparent material used as the basis for the wireframe chunk
    * border `BoxHelper` created lazily in {@link updateBoxHelper}. Kept on the
@@ -238,6 +240,26 @@ export class ChunkMeshManager {
       this.globalLegacyBlendShaderMaterial.uniforms.u_atlas.value = atlas
       this.globalLegacyBlendShaderMaterial.needsUpdate = true
     }
+  }
+
+  /** Render-time sky light cap (0–1, from time-of-day / 15). */
+  setSkyLevel (value: number): void {
+    const cube = this.cubeShaderMaterial ?? (this.isShaderCubesGpuEnabled() ? this.getCubeShaderMaterial() : null)
+    if (cube) setCubeSkyLevel(cube, value)
+    if (this.legacyShaderMaterial) setLegacySkyLevel(this.legacyShaderMaterial, value)
+    if (this.globalLegacyShaderMaterial) setLegacySkyLevel(this.globalLegacyShaderMaterial, value)
+    if (this.globalLegacyBlendShaderMaterial) setLegacySkyLevel(this.globalLegacyBlendShaderMaterial, value)
+    this.blockEntityLightRegistry.setSkyLevel(value)
+  }
+
+  /** Vanilla-like lightmap curve params (live tuning via window.setBlockLightmap). */
+  setBlockLightmapParams (params: BlockLightmapParams): void {
+    const cube = this.cubeShaderMaterial ?? (this.isShaderCubesGpuEnabled() ? this.getCubeShaderMaterial() : null)
+    if (cube) setCubeLightmapParams(cube, params)
+    if (this.legacyShaderMaterial) setLegacyLightmapParams(this.legacyShaderMaterial, params)
+    if (this.globalLegacyShaderMaterial) setLegacyLightmapParams(this.globalLegacyShaderMaterial, params)
+    if (this.globalLegacyBlendShaderMaterial) setLegacyLightmapParams(this.globalLegacyBlendShaderMaterial, params)
+    this.blockEntityLightRegistry.setLightmapParams(params)
   }
 
   private getLegacyShaderMaterial (): THREE.ShaderMaterial {
@@ -561,14 +583,14 @@ export class ChunkMeshManager {
     if (!section) return
 
     if (section.deferredLegacyOpaque) {
-      const { positions, colors, uvs, indices } = section.deferredLegacyOpaque
+      const { positions, colors, skyLights, blockLights, uvs, indices } = section.deferredLegacyOpaque
       const wx = section.worldX
       const wy = section.worldY
       const wz = section.worldZ
       if (wx !== undefined && wy !== undefined && wz !== undefined) {
         this.getGlobalLegacyBuffer().addSection(
           sectionKey,
-          { positions, colors, uvs, indices },
+          { positions, colors, skyLights, blockLights, uvs, indices },
           wx,
           wy,
           wz,
@@ -578,14 +600,14 @@ export class ChunkMeshManager {
     }
 
     if (section.deferredLegacyBlend) {
-      const { positions, colors, uvs, indices } = section.deferredLegacyBlend
+      const { positions, colors, skyLights, blockLights, uvs, indices } = section.deferredLegacyBlend
       const wx = section.worldX
       const wy = section.worldY
       const wz = section.worldZ
       if (wx !== undefined && wy !== undefined && wz !== undefined) {
         this.getGlobalLegacyBlendBuffer().addSection(
           sectionKey,
-          { positions, colors, uvs, indices },
+          { positions, colors, skyLights, blockLights, uvs, indices },
           wx,
           wy,
           wz,
@@ -775,6 +797,8 @@ export class ChunkMeshManager {
     this.updateGeometryAttribute(mesh.geometry, 'position', geo.positions, 3)
     this.updateGeometryAttribute(mesh.geometry, 'normal', geo.normals, 3)
     this.updateGeometryAttribute(mesh.geometry, 'color', geo.colors, 3)
+    this.updateGeometryAttribute(mesh.geometry, 'a_skyLight', geo.skyLights, 1)
+    this.updateGeometryAttribute(mesh.geometry, 'a_blockLight', geo.blockLights, 1)
     this.updateGeometryAttribute(mesh.geometry, 'uv', geo.uvs, 2)
     mesh.geometry.index = new THREE.BufferAttribute(geo.indices as Uint32Array | Uint16Array, 1)
     mesh.geometry.boundingBox = new THREE.Box3(
@@ -837,6 +861,8 @@ export class ChunkMeshManager {
       const opaqueGeo: LegacySectionGeometry = {
         positions: geometryData.positions as Float32Array,
         colors: geometryData.colors as Float32Array,
+        skyLights: geometryData.skyLights as Float32Array,
+        blockLights: geometryData.blockLights as Float32Array,
         uvs: geometryData.uvs as Float32Array,
         indices: geometryData.indices as Uint32Array | Uint16Array,
       }
@@ -845,6 +871,8 @@ export class ChunkMeshManager {
         deferredLegacyOpaque = {
           positions: new Float32Array(opaqueGeo.positions),
           colors: new Float32Array(opaqueGeo.colors),
+          skyLights: new Float32Array(opaqueGeo.skyLights),
+          blockLights: new Float32Array(opaqueGeo.blockLights),
           uvs: new Float32Array(opaqueGeo.uvs),
           indices: opaqueGeo.indices instanceof Uint32Array
             ? new Uint32Array(opaqueGeo.indices)
@@ -875,6 +903,8 @@ export class ChunkMeshManager {
       const blendGeo: LegacySectionGeometry = {
         positions: geometryData.blend.positions as Float32Array,
         colors: geometryData.blend.colors as Float32Array,
+        skyLights: geometryData.blend.skyLights as Float32Array,
+        blockLights: geometryData.blend.blockLights as Float32Array,
         uvs: geometryData.blend.uvs as Float32Array,
         indices: geometryData.blend.indices as Uint32Array | Uint16Array,
       }
@@ -883,6 +913,8 @@ export class ChunkMeshManager {
         deferredLegacyBlend = {
           positions: new Float32Array(blendGeo.positions),
           colors: new Float32Array(blendGeo.colors),
+          skyLights: new Float32Array(blendGeo.skyLights),
+          blockLights: new Float32Array(blendGeo.blockLights),
           uvs: new Float32Array(blendGeo.uvs),
           indices: blendGeo.indices instanceof Uint32Array
             ? new Uint32Array(blendGeo.indices)
@@ -1035,13 +1067,30 @@ export class ChunkMeshManager {
         bannersContainer.name = 'banners'
         sectionObject.bannersContainer = bannersContainer
         sectionObject.add(bannersContainer)
-        for (const [posKey, { isWall, rotation, blockName }] of Object.entries(geometryData.banners)) {
+        for (const [posKey, bannerMeta] of Object.entries(geometryData.banners)) {
+          const { isWall, rotation, blockName, blockLightNorm = 0, skyLightNorm = 1 } = bannerMeta
           const bannerBlockEntity = this.worldRenderer.blockEntities[posKey]
           if (!bannerBlockEntity) continue
           const [x, y, z] = posKey.split(',')
           const bannerTexture = getBannerTexture(this.worldRenderer, blockName, nbt.simplify(bannerBlockEntity))
           if (!bannerTexture) continue
-          const banner = createBannerMesh(new Vec3(+x, +y, +z), rotation, isWall, bannerTexture)
+          const skyLevel = this.blockEntityLightRegistry.getSkyLevel()
+          const banner = createBannerMesh(
+            new Vec3(+x, +y, +z),
+            rotation,
+            isWall,
+            bannerTexture,
+            blockLightNorm,
+            skyLightNorm,
+            skyLevel,
+          )
+          if (banner.bannerMaterial) {
+            this.blockEntityLightRegistry.register({
+              material: banner.bannerMaterial,
+              blockLightNorm,
+              skyLightNorm,
+            })
+          }
           const { x: bwx, y: bwy, z: bwz } = banner.position
           this.worldRenderer.sceneOrigin.track(banner)
           banner.position.set(bwx, bwy, bwz)
@@ -1275,11 +1324,15 @@ export class ChunkMeshManager {
       }
       // Cleanup banner textures before disposing
       if (sectionObject.bannersContainer) {
-        sectionObject.bannersContainer.traverse((child) => {
-          if ((child as any).bannerTexture) {
-            releaseBannerTexture((child as any).bannerTexture)
+        for (const child of sectionObject.bannersContainer.children) {
+          const banner = child as THREE.Group & { bannerMaterial?: THREE.MeshBasicMaterial, bannerTexture?: THREE.Texture }
+          if (banner.bannerMaterial) {
+            this.blockEntityLightRegistry.unregister(banner.bannerMaterial)
           }
-        })
+          if (banner.bannerTexture) {
+            releaseBannerTexture(banner.bannerTexture)
+          }
+        }
         this.disposeContainer(sectionObject.bannersContainer)
       }
       this.globalBlockBuffer?.removeSection(sectionKey)
@@ -1729,7 +1782,7 @@ export class ChunkMeshManager {
   }
 
   private clearGeometry (geometry: THREE.BufferGeometry) {
-    const attributes = ['position', 'normal', 'color', 'uv']
+    const attributes = ['position', 'normal', 'color', 'a_skyLight', 'a_blockLight', 'uv']
     for (const name of attributes) {
       if (geometry.hasAttribute(name)) {
         geometry.deleteAttribute(name)

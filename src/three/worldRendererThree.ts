@@ -8,6 +8,7 @@ import { renderSign } from '../sign-renderer'
 import { DisplayWorldOptions, GraphicsInitOptions } from '../graphicsBackend/types'
 import { chunkPos, sectionPos } from '../lib/simpleUtils'
 import { WorldRendererCommon } from '../lib/worldrendererCommon'
+import { calculateSkyLightSimple } from '../lib/skyLight'
 import { addNewStat, MC_RENDERER_DEBUG_OVERLAY_CLASS } from '../lib/ui/newStats'
 import { MesherGeometryOutput } from '../mesher-shared/shared'
 import { ItemSpecificContextProperties } from '../playerState/types'
@@ -178,6 +179,15 @@ export class WorldRendererThree extends WorldRendererCommon {
     this.onRenderDistanceChanged = (viewDistance) => {
       this.chunkMeshManager.updateViewDistance(viewDistance)
     }
+
+    // Final lightmap values TBD — compare against https://v99.mcraft.fun/
+    if (typeof window !== 'undefined') {
+      (window as any).setBlockLightmap = (params: { curve?: number, minBrightness?: number, gamma?: number }) => {
+        this.chunkMeshManager.setBlockLightmapParams(params)
+      }
+    }
+
+    this.syncSkyLevelFromTime(this.timeOfTheDay)
 
     this.cursorBlock = new CursorBlock(this)
     this.holdingBlock = createHoldingBlock(this)
@@ -445,6 +455,7 @@ export class WorldRendererThree extends WorldRendererCommon {
       this.cinimaticScript.stopScript()
       // Clear fireworks
       this.fireworks.clear()
+      this.syncSkyLevelFromTime(this.timeOfTheDay)
     })
   }
 
@@ -681,6 +692,16 @@ export class WorldRendererThree extends WorldRendererCommon {
     }
 
     this.skyboxRenderer.updateTime(newTime)
+    this.syncSkyLevelFromTime(newTime)
+  }
+
+  private syncSkyLevelFromTime (timeOfDay: number): void {
+    const skyLevel = calculateSkyLightSimple(timeOfDay) / 15
+    this.chunkMeshManager.setSkyLevel(skyLevel)
+  }
+
+  protected onDayCycleSkyLightChanged(_skyLight: number): void {
+    // Sky cap is driven by u_skyLevel uniform; no remesh on day/night.
   }
 
   biomeUpdated(biome: Biome): void {

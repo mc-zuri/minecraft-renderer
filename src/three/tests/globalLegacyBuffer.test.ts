@@ -6,6 +6,8 @@ import { createGlobalLegacyBlockMaterial } from '../shaders/legacyBlockShader'
 function makeQuadGeometry (): {
   positions: Float32Array
   colors: Float32Array
+  skyLights: Float32Array
+  blockLights: Float32Array
   uvs: Float32Array
   indices: Uint32Array
 } {
@@ -22,6 +24,8 @@ function makeQuadGeometry (): {
       1, 1, 1,
       1, 1, 1,
     ]),
+    skyLights: new Float32Array([1, 1, 1, 1]),
+    blockLights: new Float32Array([0, 0, 0, 0]),
     uvs: new Float32Array([
       0, 0,
       1, 0,
@@ -285,6 +289,8 @@ test('GlobalLegacyBuffer: updateDrawSpans opaque caps at MAX_OPAQUE_SPANS with f
     ...makeQuadGeometry(),
     positions: new Float32Array(padQuads * 4 * 3),
     colors: new Float32Array(padQuads * 4 * 3).fill(1),
+    skyLights: new Float32Array(padQuads * 4).fill(1),
+    blockLights: new Float32Array(padQuads * 4).fill(0),
     uvs: new Float32Array(padQuads * 4 * 2),
     indices: new Uint32Array(padQuads * 6),
   }
@@ -341,6 +347,8 @@ test('GlobalLegacyBuffer: addSection rejects non-quad geometry', () => {
   const bad = {
     positions: new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]),
     colors: new Float32Array(9),
+    skyLights: new Float32Array(3).fill(1),
+    blockLights: new Float32Array(3).fill(0),
     uvs: new Float32Array(6),
     indices: new Uint32Array([0, 1, 2]),
   }

@@ -34,6 +34,8 @@ export type MesherGeometryBucketData = {
   positions: Float32Array
   normals: Float32Array
   colors: Float32Array
+  skyLights: Float32Array
+  blockLights: Float32Array
   uvs: Float32Array
   indices: Uint32Array | Uint16Array
 }
@@ -55,6 +57,8 @@ export type MesherGeometryOutput = {
   positions: any,
   normals: any,
   colors: any,
+  skyLights: any,
+  blockLights: any,
   uvs: any,
   /** Per-section blend geometry (water, lava, stained glass, ice, etc.). */
   blend?: MesherGeometryBucketData,

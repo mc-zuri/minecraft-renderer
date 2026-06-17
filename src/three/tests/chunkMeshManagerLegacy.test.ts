@@ -17,9 +17,11 @@ function makeQuadArrays () {
     -1, -1, 1,
   ])
   const colors = new Float32Array(12).fill(1)
+  const skyLights = new Float32Array(4).fill(1)
+  const blockLights = new Float32Array(4).fill(0)
   const uvs = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1])
   const indices = new Uint32Array([0, 1, 2, 0, 2, 3])
-  return { positions, colors, uvs, indices }
+  return { positions, colors, skyLights, blockLights, uvs, indices }
 }
 
 function makeBlendOnlyGeometry (): MesherGeometryOutput {
@@ -39,6 +41,8 @@ function makeBlendOnlyGeometry (): MesherGeometryOutput {
     positions: new Float32Array(0),
     normals: new Float32Array(0),
     colors: new Float32Array(0),
+    skyLights: new Float32Array(0),
+    blockLights: new Float32Array(0),
     uvs: new Float32Array(0),
     indices: new Uint32Array(0),
     indicesCount: 0,
@@ -53,6 +57,8 @@ function makeBlendOnlyGeometry (): MesherGeometryOutput {
       positions: blend.positions,
       normals: new Float32Array(12),
       colors: blend.colors,
+      skyLights: blend.skyLights,
+      blockLights: blend.blockLights,
       uvs: blend.uvs,
       indices: blend.indices,
     },
@@ -77,6 +83,8 @@ function makeMixedGeometry (): MesherGeometryOutput {
     positions: opaque.positions,
     normals: new Float32Array(12),
     colors: opaque.colors,
+    skyLights: opaque.skyLights,
+    blockLights: opaque.blockLights,
     uvs: opaque.uvs,
     indices: opaque.indices,
     indicesCount: 6,
@@ -91,6 +99,8 @@ function makeMixedGeometry (): MesherGeometryOutput {
       positions: blend.positions,
       normals: new Float32Array(12),
       colors: blend.colors,
+      skyLights: blend.skyLights,
+      blockLights: blend.blockLights,
       uvs: blend.uvs,
       indices: blend.indices,
     },

@@ -1,4 +1,11 @@
 import * as THREE from 'three'
+import {
+  APPLY_LIGHTMAP_GLSL,
+  DEFAULT_LIGHTMAP_PARAMS,
+  type BlockLightmapParams,
+} from '../../lib/blockEntityLighting'
+
+export type { BlockLightmapParams }
 
 // Face order: UP=0, DOWN=1, EAST=2, WEST=3, SOUTH=4, NORTH=5
 // matches WASM mesher face order (mesher.rs FACE_NAMES)
@@ -16,8 +23,10 @@ layout(location = 3) in uint a_w3;
 uniform ivec3 u_sectionOriginRel;
 uniform vec3 u_originDelta;
 uniform vec3 u_cameraOriginFrac;
+uniform float u_skyLevel;
 
-out float v_light;
+out float v_blockLight;
+out float v_skyLight;
 out float v_ao;
 out vec2 v_uv;
 flat out int v_texIndex;
@@ -125,9 +134,12 @@ void main() {
     uint aoLevel = (a_w0 >> uint(23 + vi * 2)) & 0x3u;
     v_ao = (float(aoLevel) + 1.0) / 4.0;
 
-    // --- word1: combined smooth light (8 bits per corner) ---
+    // --- word1: sky (high nibble) + block (low nibble) light per corner ---
     uint lightRaw = (a_w1 >> uint(vi * 8)) & 0xFFu;
-    v_light = float(lightRaw) / 255.0;
+    uint sky4 = (lightRaw >> 4u) & 0xFu;
+    uint block4 = lightRaw & 0xFu;
+    v_skyLight = float(sky4) / 15.0;
+    v_blockLight = float(block4) / 15.0;
 
     // --- word2: texture index ---
     v_texIndex = int(a_w2 & 0xFFFu);
@@ -182,8 +194,13 @@ uniform sampler2D u_atlas;
 uniform sampler2D u_tintPalette;
 /** 0=normal 1=holes 2=tileIndex 3=faceId 4=atlasAlpha */
 uniform float u_debugMode;
+uniform float u_skyLevel;
+uniform float u_lightCurve;
+uniform float u_minBrightness;
+uniform float u_lightGamma;
 
-in float v_light;
+in float v_blockLight;
+in float v_skyLight;
 in float v_ao;
 in vec2 v_uv;
 flat in int v_texIndex;
@@ -227,6 +244,8 @@ void applyFog() {
     FragColor.rgb = mix(FragColor.rgb, fogColor, fogFactor);
 #endif
 }
+
+${APPLY_LIGHTMAP_GLSL}
 
 void main() {
     // Atlas sample (pixelated, no filtering)
@@ -272,9 +291,9 @@ void main() {
     // Tint from palette (256x1 RGBA texture, index 0 = white [1,1,1])
     vec3 tint = texelFetch(u_tintPalette, ivec2(v_tintIndex, 0), 0).rgb;
 
-    // Combined light * AO, identity brightness curve (no mcBrightness) to match the
-    // legacy CPU mesher output 1:1.
-    float brightness = v_light * v_ao;
+    float L = max(v_blockLight, min(v_skyLight, u_skyLevel));
+    float Lm = applyLightmap(L);
+    float brightness = Lm * v_ao;
 
     // Opaque full cubes: always alpha 1 (legacy uses cutout material; avoids seeing blocks behind)
     FragColor = vec4(baseColor.rgb * tint * brightness, 1.0);
@@ -296,6 +315,10 @@ export function createCubeBlockMaterial(): THREE.ShaderMaterial {
                 u_atlas: { value: null },
                 u_tintPalette: { value: null },
                 u_debugMode: { value: 0 },
+                u_skyLevel: { value: 1.0 },
+                u_lightCurve: { value: DEFAULT_LIGHTMAP_PARAMS.curve },
+                u_minBrightness: { value: DEFAULT_LIGHTMAP_PARAMS.minBrightness },
+                u_lightGamma: { value: DEFAULT_LIGHTMAP_PARAMS.gamma },
                 u_sectionOriginRel: { value: new THREE.Vector3(0, 0, 0) },
                 u_originDelta: { value: new THREE.Vector3() },
                 u_cameraOriginFrac: { value: new THREE.Vector3() },
@@ -315,6 +338,29 @@ export function createCubeBlockMaterial(): THREE.ShaderMaterial {
 }
 
 // Three geometry constants: 6 vertices per face (2 triangles, un-indexed)
+export function setCubeSkyLevel (material: THREE.ShaderMaterial, value: number): void {
+    const u = material.uniforms.u_skyLevel
+    if (u) u.value = value
+}
+
+export function setCubeLightmapParams (
+    material: THREE.ShaderMaterial,
+    params: BlockLightmapParams,
+): void {
+    if (params.curve !== undefined) {
+        const u = material.uniforms.u_lightCurve
+        if (u) u.value = params.curve
+    }
+    if (params.minBrightness !== undefined) {
+        const u = material.uniforms.u_minBrightness
+        if (u) u.value = params.minBrightness
+    }
+    if (params.gamma !== undefined) {
+        const u = material.uniforms.u_lightGamma
+        if (u) u.value = params.gamma
+    }
+}
+
 export const VERTICES_PER_FACE = 6
 
 /** Section index units for render origin R (R is always a multiple of 16). */
