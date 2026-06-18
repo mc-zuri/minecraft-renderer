@@ -171,14 +171,7 @@ function vertexTintAoColor (
 }
 
 function sampleChannelLightAt (world: World, pos: Vec3): { block: number, sky: number } {
-  const column = world.getColumnByPos(pos)
-  if (!column) return { block: 0, sky: 1 }
-  const loc = pos.floored()
-  const locInChunk = new Vec3(loc.x & 15, loc.y, loc.z & 15)
-  return {
-    block: column.getBlockLight(locInChunk) / 15,
-    sky: column.getSkyLight(locInChunk) / 15,
-  }
+  return world.getChannelLightNorm(pos)
 }
 
 function smoothChannelLightAt (
@@ -864,7 +857,7 @@ export function renderWasmOutputToGeometry(
 
             tgtNorm.push(transformedDir[0], transformedDir[1], transformedDir[2])
 
-            const useModelLighting = !cachedModel.isCube && world
+            const useModelLighting = (!cachedModel.isCube || globalMatrix != null) && world
 
             let ao = 3
             let skyLightNorm = 1
@@ -899,11 +892,15 @@ export function renderWasmOutputToGeometry(
               ao = (side1Block && side2Block) ? 0 : (3 - (side1Block + side2Block + cornerBlock))
               computedAoValues[cornerIdx] = ao
 
+              const cornerDirL = matmul3(globalMatrix, [dx, dy, dz])
+              const cornerOffsetI: [number, number, number] = [
+                Math.round(cornerDirL[0]), Math.round(cornerDirL[1]), Math.round(cornerDirL[2]),
+              ]
               const channels = smoothChannelLightAt(
                 world,
                 cursor,
-                transformedDirI as [number, number, number],
-                [dx, dy, dz],
+                faceDir,
+                cornerOffsetI,
                 faceIdx ?? 0,
               )
               skyLightNorm = channels.sky

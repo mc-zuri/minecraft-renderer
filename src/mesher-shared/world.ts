@@ -82,8 +82,8 @@ export class World {
     if (!column || !hasChunkSection(column, pos)) return { block: 0, sky: 1 }
     const loc = posInChunk(pos)
     return {
-      block: column.getBlockLight(loc) / 15,
-      sky: column.getSkyLight(loc) / 15,
+      block: Math.min(15, column.getBlockLight(loc) + 2) / 15,
+      sky: Math.min(15, column.getSkyLight(loc) + 2) / 15,
     }
   }
 

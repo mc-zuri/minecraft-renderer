@@ -73,6 +73,11 @@ fn is_solid(world: &WorldView<'_>, x: i32, y: i32, z: i32) -> bool {
     state != 0
 }
 
+#[inline(always)]
+fn brighten_light_nibble(v: f32) -> f32 {
+    (v + 2.0).min(15.0)
+}
+
 /// Sample block and sky light separately with optional smooth 4-corner averaging.
 /// Returns (block_avg 0-15, sky_avg 0-15).
 #[inline(always)]
@@ -92,8 +97,8 @@ fn calculate_light_channels_inner(
     let neighbor_y = y + fy;
     let neighbor_z = z + fz;
 
-    let base_block = world.get_block_light(neighbor_x, neighbor_y, neighbor_z) as f32;
-    let base_sky = world.get_sky_light(neighbor_x, neighbor_y, neighbor_z) as f32;
+    let base_block = brighten_light_nibble(world.get_block_light(neighbor_x, neighbor_y, neighbor_z) as f32);
+    let base_sky = brighten_light_nibble(world.get_sky_light(neighbor_x, neighbor_y, neighbor_z) as f32);
 
     if !smooth_lighting {
         return (base_block, base_sky);
@@ -102,10 +107,10 @@ fn calculate_light_channels_inner(
     let [cx, cy, cz] = corner_offset;
 
     let get_block = |px: i32, py: i32, pz: i32| -> f32 {
-        world.get_block_light(px, py, pz) as f32
+        brighten_light_nibble(world.get_block_light(px, py, pz) as f32)
     };
     let get_sky = |px: i32, py: i32, pz: i32| -> f32 {
-        world.get_sky_light(px, py, pz) as f32
+        brighten_light_nibble(world.get_sky_light(px, py, pz) as f32)
     };
 
     let mask1 = FACE_MASK1[face_idx];
