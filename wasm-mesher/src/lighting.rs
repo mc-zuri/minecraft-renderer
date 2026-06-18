@@ -230,6 +230,10 @@ mod tests {
     use super::*;
     use crate::chunk::{ChunkData, WorldView};
 
+    fn brighten_nibble(v: u8) -> f32 {
+        (v as f32 + 2.0).min(15.0)
+    }
+
     fn make_world(block_light_val: u8, sky_light_val: u8) -> WorldView<'static> {
         let size = 16 * 16 * 3;
         let block_states: &'static [u16] = Vec::leak(vec![1u16; size]);
@@ -259,9 +263,9 @@ mod tests {
             [0, 1, 0], 0, [-1, 1, -1],
             false,
         );
-        assert!((block_f - 8.0 / 15.0).abs() < 0.001, "block_f={}", block_f);
-        assert!((sky_f - 12.0 / 15.0).abs() < 0.001, "sky_f={}", sky_f);
-        assert_eq!(packed, (12 << 4) | 8);
+        assert!((block_f - brighten_nibble(8) / 15.0).abs() < 0.001, "block_f={}", block_f);
+        assert!((sky_f - brighten_nibble(12) / 15.0).abs() < 0.001, "sky_f={}", sky_f);
+        assert_eq!(packed, (brighten_nibble(12) as u8) << 4 | brighten_nibble(8) as u8);
     }
 
     #[test]
@@ -272,9 +276,9 @@ mod tests {
             [0, 1, 0], 0, [-1, 1, -1],
             true,
         );
-        assert!((block_f - 8.0 / 15.0).abs() < 0.001);
-        assert!((sky_f - 0.0).abs() < 0.001);
-        assert_eq!(packed, 8);
+        assert!((block_f - brighten_nibble(8) / 15.0).abs() < 0.001);
+        assert!((sky_f - brighten_nibble(0) / 15.0).abs() < 0.001);
+        assert_eq!(packed, (brighten_nibble(0) as u8) << 4 | brighten_nibble(8) as u8);
     }
 
     #[test]
@@ -285,9 +289,10 @@ mod tests {
             [0, 1, 0], 0, [-1, 1, 1],
             true,
         );
-        // block: inside=9, outside=0 → avg=4.5; sky: inside=0, outside=15 → avg=7.5
-        assert!((block_f - 4.5 / 15.0).abs() < 0.001, "block_f={}", block_f);
-        assert!((sky_f - 7.5 / 15.0).abs() < 0.001, "sky_f={}", sky_f);
+        // block: inside=9, outside=0 → avg=4.5 raw, 6.5 after +2 per sample
+        // sky: inside=0, outside=15 → avg=7.5 raw, 8.5 after +2 per sample
+        assert!((block_f - 6.5 / 15.0).abs() < 0.001, "block_f={}", block_f);
+        assert!((sky_f - 8.5 / 15.0).abs() < 0.001, "sky_f={}", sky_f);
     }
 
     #[test]
@@ -298,9 +303,9 @@ mod tests {
             [0, 1, 0], 0, [-1, 1, -1],
             true,
         );
-        assert!((block_f - 0.0).abs() < 0.001);
-        assert!((sky_f - 0.0).abs() < 0.001);
-        assert_eq!(packed, 0);
+        assert!((block_f - brighten_nibble(0) / 15.0).abs() < 0.001);
+        assert!((sky_f - brighten_nibble(0) / 15.0).abs() < 0.001);
+        assert_eq!(packed, (brighten_nibble(0) as u8) << 4 | brighten_nibble(0) as u8);
     }
 
     #[test]
@@ -311,9 +316,9 @@ mod tests {
             [0, 1, 0], 0, [-1, 1, -1],
             true,
         );
-        assert!((block_f - 0.0).abs() < 0.001);
-        assert!((sky_f - 1.0).abs() < 0.001);
-        assert_eq!(packed, 0xF0);
+        assert!((block_f - brighten_nibble(0) / 15.0).abs() < 0.001);
+        assert!((sky_f - brighten_nibble(15) / 15.0).abs() < 0.001);
+        assert_eq!(packed, (brighten_nibble(15) as u8) << 4 | brighten_nibble(0) as u8);
     }
 
     #[test]
