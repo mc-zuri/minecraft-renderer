@@ -165,8 +165,8 @@ export const RENDERER_OPTIONS_META: Partial<Record<RendererDefaultOptionKey, Ren
   },
   rendererWorldPerformance: {
     text: 'World performance',
-    tooltip: 'Background workers for chunk geometry. Reload to apply.',
-    requiresRestart: true,
+    tooltip: 'Background workers for chunk geometry. Recreates mesher workers and reloads chunks.',
+    requiresChunksReload: true,
     possibleValues: [
       ['low-energy', 'Low Energy'],
       ['normal', 'Normal'],
@@ -192,8 +192,8 @@ export const RENDERER_OPTIONS_META: Partial<Record<RendererDefaultOptionKey, Ren
   rendererMesher: {
     possibleValues: [['wasm', 'WASM'], ['legacy-js', 'Legacy JS']],
     text: 'Mesher pipeline',
-    tooltip: 'WASM is faster. Use JS if WASM is not working. Requires reload.',
-    requiresRestart: true
+    tooltip: 'Browser technology for processing world geometry before render. WASM is the fastest; if you see a dead tab icon, reloads, or other errors, switch to Legacy JS.',
+    requiresChunksReload: true,
   },
   rendererShaderCubeDebugMode: {
     text: 'Shader cube debug',

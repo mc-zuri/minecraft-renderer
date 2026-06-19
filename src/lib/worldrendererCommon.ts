@@ -127,6 +127,12 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
   debugStopGeometryUpdate = false
 
   protocolCustomBlocks = new Map<string, CustomBlockModels>()
+  private mesherPoolSnapshot = {
+    mesherWorkers: -1,
+    wasmMesher: false,
+    dedicatedChangeWorker: false,
+  }
+  private mesherReconfigureQueue: Promise<void> = Promise.resolve()
   private heightmapDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   // Geometry throttle: first dirty per section is instant, subsequent within window are grouped
@@ -272,6 +278,7 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
 
     this.watchReactivePlayerState()
     this.watchReactiveConfig()
+    this.watchMesherPoolConfig()
     this.worldReadyResolvers.resolve()
   }
 
@@ -309,18 +316,127 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
     }
   }
 
+  private getMesherWorkerScript(): 'wasm' | 'legacy' {
+    return this.worldRendererConfig.wasmMesher ? 'wasm' : 'legacy'
+  }
+
+  private createMesherWorker() {
+    const script = this.getMesherWorkerScript()
+    return initMesherWorker((data) => {
+      if (Array.isArray(data)) {
+        this.messageQueue.push(...data)
+      } else {
+        this.messageQueue.push(data)
+      }
+      void this.processMessageQueue('worker')
+    }, script === 'wasm' ? 'mesherWasm.js' : 'mesher.js')
+  }
+
   initWorkers(numWorkers = this.worldRendererConfig.mesherWorkers) {
-    // init workers
-    for (let i = 0; i < numWorkers + 0; i++) {
-      const worker = initMesherWorker((data) => {
-        if (Array.isArray(data)) {
-          this.messageQueue.push(...data)
-        } else {
-          this.messageQueue.push(data)
-        }
-        void this.processMessageQueue('worker')
-      }, this.worldRendererConfig.wasmMesher ? 'mesherWasm.js' : 'mesher.js')
-      this.workers.push(worker)
+    for (let i = 0; i < numWorkers; i++) {
+      this.workers.push(this.createMesherWorker())
+    }
+  }
+
+  private syncMesherPoolSnapshot() {
+    this.mesherPoolSnapshot = {
+      mesherWorkers: this.worldRendererConfig.mesherWorkers,
+      wasmMesher: this.worldRendererConfig.wasmMesher,
+      dedicatedChangeWorker: this.worldRendererConfig.dedicatedChangeWorker,
+    }
+  }
+
+  private watchMesherPoolConfig() {
+    this.syncMesherPoolSnapshot()
+
+    const tryReconfigure = () => {
+      const cfg = this.worldRendererConfig
+      const snap = this.mesherPoolSnapshot
+      if (
+        cfg.mesherWorkers === snap.mesherWorkers &&
+        cfg.wasmMesher === snap.wasmMesher &&
+        cfg.dedicatedChangeWorker === snap.dedicatedChangeWorker
+      ) {
+        return
+      }
+      this.syncMesherPoolSnapshot()
+      this.enqueueMesherWorkersReconfigure()
+    }
+
+    for (const key of ['mesherWorkers', 'wasmMesher', 'dedicatedChangeWorker'] as const) {
+      this.valtioUnsubs.push(
+        this.onReactiveConfigUpdated(key, tryReconfigure, false)
+      )
+    }
+  }
+
+  private enqueueMesherWorkersReconfigure() {
+    this.mesherReconfigureQueue = this.mesherReconfigureQueue
+      .then(() => this.reconfigureMesherWorkers())
+      .catch((err) => {
+        console.error('[Mesher] Failed to reconfigure workers:', err)
+      })
+  }
+  private clearMesherPendingState() {
+    this.sectionsWaiting.clear()
+    this.toWorkerMessagesQueue = {}
+    this.queueAwaited = false
+    this.messageQueue = []
+    this.isProcessingQueue = false
+    for (const timer of this.sectionDirtyTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.sectionDirtyTimers.clear()
+    this.sectionDirtyCount.clear()
+    this.sectionDirtyPendingArgs.clear()
+    this.reactiveState.world.mesherWork = false
+  }
+
+  private terminateAllMesherWorkers() {
+    for (const worker of this.workers) {
+      worker.terminate()
+    }
+    this.workers = []
+  }
+
+  private async bootstrapMesherWorkers() {
+    if (this.workers.length === 0) return
+
+    this.sendMesherMcData()
+    await this.updateAssetsData()
+    this.logWorkerWork('# mesher workers bootstrapped')
+  }
+
+  async reconfigureMesherWorkers() {
+    if (!this.active) return
+
+    this.clearMesherPendingState()
+    this.terminateAllMesherWorkers()
+    this.initWorkers()
+    await this.bootstrapMesherWorkers()
+    if (!this.active) return
+
+    await this.requestLoadedChunksReload()
+  }
+
+  private async requestLoadedChunksReload() {
+    try {
+      const worldView = this.displayOptions.worldView as {
+        reloadLoadedChunks?: () => void | Promise<void>
+      }
+
+      if (typeof worldView.reloadLoadedChunks === 'function') {
+        await worldView.reloadLoadedChunks()
+        return
+      }
+
+      const workerScope = globalThis as typeof globalThis & { WorkerGlobalScope?: typeof WorkerGlobalScope }
+      if (typeof workerScope.WorkerGlobalScope !== 'undefined' && globalThis instanceof workerScope.WorkerGlobalScope) {
+        // eslint-disable-next-line no-restricted-globals
+        self.postMessage({ type: 'reloadLoadedChunks' })
+      }
+    } catch (err) {
+      console.error('[Mesher] Failed to reload chunks after worker reconfigure:', err)
     }
   }
 
@@ -331,13 +447,18 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
     return subscribeKey(this.playerStateReactive, key, callback)
   }
 
-  onReactiveConfigUpdated<T extends keyof typeof this.worldRendererConfig>(key: T, callback: (value: typeof this.worldRendererConfig[T]) => void) {
-    callback(this.worldRendererConfig[key])
-    if ((key as any) === '*') {
-      subscribe(this.worldRendererConfig, callback as any)
-    } else {
-      subscribeKey(this.worldRendererConfig, key, callback)
+  onReactiveConfigUpdated<T extends keyof typeof this.worldRendererConfig>(
+    key: T,
+    callback: (value: typeof this.worldRendererConfig[T]) => void,
+    initial = true
+  ) {
+    if (initial) {
+      callback(this.worldRendererConfig[key])
     }
+    if ((key as any) === '*') {
+      return subscribe(this.worldRendererConfig, callback as any)
+    }
+    return subscribeKey(this.worldRendererConfig, key, callback)
   }
 
   onReactiveDebugUpdated<T extends keyof typeof this.reactiveDebugParams>(key: T, callback: (value: typeof this.reactiveDebugParams[T]) => void) {
@@ -640,6 +761,7 @@ export abstract class WorldRendererCommon<WorkerSend = any, WorkerReceive = any>
 
     this.initWorkers()
     this.active = true
+    this.syncMesherPoolSnapshot()
 
     this.sendMesherMcData()
   }
