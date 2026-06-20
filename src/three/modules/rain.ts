@@ -16,11 +16,6 @@ const FALL_SPEED_MAX = 24
 const HORIZONTAL_DRIFT = 1.2
 const RESPAWN_BELOW = -5
 
-const moduleOptions = {
-  particleCount: 2000,
-  speedFactor: 1,
-}
-
 export class RainModule implements RendererModuleController {
   private instancedMesh?: THREE.InstancedMesh
   private geometry?: THREE.BoxGeometry
@@ -31,8 +26,14 @@ export class RainModule implements RendererModuleController {
   private readonly tempPosition = new THREE.Vector3()
   private readonly tempQuaternion = new THREE.Quaternion()
   private readonly tempScale = new THREE.Vector3()
+  private readonly configUnsubs: Array<() => void> = []
 
-  constructor(private readonly worldRenderer: WorldRendererThree) { }
+  constructor(private readonly worldRenderer: WorldRendererThree) {
+    this.configUnsubs.push(
+      this.worldRenderer.onReactiveConfigUpdated('rainColor', () => this.syncRainAppearance()),
+      this.worldRenderer.onReactiveConfigUpdated('rainOpacity', () => this.syncRainAppearance()),
+    )
+  }
 
   enable(): void {
     if (this.enabled) return
@@ -41,6 +42,7 @@ export class RainModule implements RendererModuleController {
       this.createRain()
     } else {
       this.instancedMesh.visible = true
+      this.syncRainAppearance()
     }
   }
 
@@ -58,8 +60,6 @@ export class RainModule implements RendererModuleController {
 
   render?: (deltaTime: number) => void = (deltaTime) => {
     if (!this.enabled || !this.instancedMesh || !this.material) return
-
-    this.syncMaterialToSceneFog()
 
     const cameraPos = this.worldRenderer.getCameraPosition()
     this.instancedMesh.position.set(0, 0, 0)
@@ -125,6 +125,9 @@ export class RainModule implements RendererModuleController {
   }
 
   dispose(): void {
+    for (const unsub of this.configUnsubs) unsub()
+    this.configUnsubs.length = 0
+
     if (this.instancedMesh) {
       this.worldRenderer.scene.remove(this.instancedMesh)
     }
@@ -136,33 +139,31 @@ export class RainModule implements RendererModuleController {
     this.particles = []
   }
 
-  /** Match scene fog so rain fades with distance instead of a flat blue sheet. */
-  private syncMaterialToSceneFog(): void {
+  private syncRainAppearance(): void {
     if (!this.material) return
-    const fog = this.worldRenderer.scene.fog
-    if (fog instanceof THREE.Fog || fog instanceof THREE.FogExp2) {
-      this.material.color.copy(fog.color)
-    } else {
-      this.material.color.set(0xcc_dd_ee)
-    }
-    this.material.fog = true
+
+    const { rainColor, rainOpacity } = this.worldRenderer.worldRendererConfig
+    this.material.color.set(rainColor)
+    this.material.opacity = Math.max(0, Math.min(1, rainOpacity))
+    this.material.needsUpdate = true
   }
 
   private createRain(): void {
+    const { rainColor, rainOpacity } = this.worldRenderer.worldRendererConfig
+
     this.geometry = new THREE.BoxGeometry(0.03, 0.3, 0.03)
     this.material = new THREE.MeshBasicMaterial({
-      color: 0xcc_dd_ee,
+      color: rainColor,
       transparent: true,
-      opacity: 0.35,
+      opacity: Math.max(0, Math.min(1, rainOpacity)),
       // Must write depth so log-depth blocks occlude rain correctly (see cubeBlockShader).
       depthWrite: true,
-      fog: true,
+      fog: false,
     })
 
     this.instancedMesh = new THREE.InstancedMesh(this.geometry, this.material, PARTICLE_COUNT)
     this.instancedMesh.name = 'rain-particles'
     this.instancedMesh.frustumCulled = false
-    this.syncMaterialToSceneFog()
 
     const dummy = new THREE.Matrix4()
     const position = new THREE.Vector3()

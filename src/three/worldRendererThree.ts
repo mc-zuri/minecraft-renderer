@@ -354,6 +354,11 @@ export class WorldRendererThree extends WorldRendererCommon {
     return targetState
   }
 
+  setRain(enabled: boolean): void {
+    this.worldRendererConfig.isRaining = enabled
+    this.toggleModule('rain', enabled)
+  }
+
   /**
    * Dispose all modules
    */
@@ -695,7 +700,7 @@ export class WorldRendererThree extends WorldRendererCommon {
     this.syncSkyLevelFromTime(newTime)
   }
 
-  private syncSkyLevelFromTime (timeOfDay: number): void {
+  private syncSkyLevelFromTime(timeOfDay: number): void {
     const skyLevel = calculateSkyLightSimple(timeOfDay) / 15
     this.chunkMeshManager.setSkyLevel(skyLevel)
   }
@@ -789,10 +794,6 @@ export class WorldRendererThree extends WorldRendererCommon {
     if (drawable) {
       drawable.renderOrder = renderOrder
     }
-  }
-
-  override updateViewerPosition(pos: Vec3): void {
-    this.viewerChunkPosition = pos
   }
 
   cameraSectionPositionUpdate() {
@@ -1582,7 +1583,7 @@ export class WorldRendererThree extends WorldRendererCommon {
     this.chunkMeshManager.onChunkRemovedFromGate(`${x},${z}`)
   }
 
-  updateViewerPosition(pos: Vec3) {
+  override updateViewerPosition(pos: Vec3) {
     super.updateViewerPosition(pos)
     if (this.chunkMeshManager.pendingNearReveal.size > 0) {
       this.chunkMeshManager.tryRevealPending()

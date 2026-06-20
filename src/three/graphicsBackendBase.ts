@@ -68,7 +68,7 @@ export const getBackendMethods = (worldRenderer: WorldRendererThree): any => {
     // New method for updating skybox
     setSkyboxImage: worldRenderer.skyboxRenderer.setSkyboxImage.bind(worldRenderer.skyboxRenderer),
     // Rain methods
-    setRain: (newState: boolean) => worldRenderer.toggleModule('rain', newState),
+    setRain: worldRenderer.setRain.bind(worldRenderer),
     spawnBlockBreakParticles(x: number, y: number, z: number, blockName: string, floorMap: number[], biomeName?: string) {
       const module = worldRenderer.getModule<import('./modules/blockBreakParticles').BlockBreakParticlesModule>('blockBreakParticles')
       module?.spawnBlockBreakParticles(x, y, z, blockName, floorMap, biomeName)
@@ -144,6 +144,10 @@ export const createGraphicsBackendBase = () => {
   let frameTimingCollector: FrameTimingCollector | null = null
 
   const init = (initOptionsArg: GraphicsInitOptions, mainData?: ThreeRendererMainData) => {
+    if (initOptionsArg.hello) {
+      console.log('Thanks for using minecraft-renderer project: one of the most performant Minecraft world renderers for the web!')
+    }
+
     if (isWebWorker) {
       initOptions = restoreTransferred(initOptionsArg, initOptionsRestorers, globalThis as unknown as Worker)
     } else {
@@ -165,8 +169,8 @@ export const createGraphicsBackendBase = () => {
       worldRenderer.destroy()
       worldRenderer = null
       frameTimingCollector = null
-      ;(globalThis as any).world = undefined
-      ;(globalThis as any).frameTimingCollector = undefined
+        ; (globalThis as any).world = undefined
+        ; (globalThis as any).frameTimingCollector = undefined
     }
 
     if (menuBackgroundRenderer) {
@@ -201,8 +205,8 @@ export const createGraphicsBackendBase = () => {
       worldRenderer.destroy()
       worldRenderer = null
       frameTimingCollector = null
-      ;(globalThis as any).world = undefined
-      ;(globalThis as any).frameTimingCollector = undefined
+        ; (globalThis as any).world = undefined
+        ; (globalThis as any).frameTimingCollector = undefined
     }
 
     const displayOptionsRestorers = [ResourcesManager, WorldViewWorker]
