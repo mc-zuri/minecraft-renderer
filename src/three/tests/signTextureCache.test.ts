@@ -1,10 +1,5 @@
 import { test, expect, vi, beforeEach } from 'vitest'
 import * as THREE from 'three'
-import { Vec3 } from 'vec3'
-
-vi.mock('../entity/EntityMesh', () => ({
-  getMesh: vi.fn(),
-}))
 
 const renderSignMock = vi.fn()
 vi.mock('../../sign-renderer', () => ({
@@ -15,25 +10,11 @@ vi.mock('prismarine-chat', () => ({
   default: () => () => ({}),
 }))
 
-import { ChunkMeshManager } from '../chunkMeshManager'
+import { getSignTexture, releaseSignTexture, disposeAllSignTextures } from '../signTextureCache'
 import type { WorldRendererThree } from '../worldRendererThree'
 
-function createManager (): ChunkMeshManager {
-  const scene = new THREE.Scene()
-  const material = new THREE.MeshBasicMaterial()
-  const worldRenderer = {
-    version: '1.20',
-    shaderCubeBlocksEnabled: () => false,
-    getModule: () => undefined,
-    sceneOrigin: {
-      track: () => {},
-      removeAndUntrack: () => {},
-      removeAndUntrackAll: () => {},
-    },
-    blockEntities: {},
-    worldRendererConfig: {},
-  } as unknown as WorldRendererThree
-  return new ChunkMeshManager(worldRenderer, scene, material, 256, 1)
+function createWorldRenderer (): WorldRendererThree {
+  return { version: '1.20' } as WorldRendererThree
 }
 
 function stubCanvas () {
@@ -43,40 +24,80 @@ function stubCanvas () {
 beforeEach(() => {
   renderSignMock.mockReset()
   renderSignMock.mockImplementation(() => stubCanvas())
+  disposeAllSignTextures()
 })
 
-test('getSignTexture: same blockEntity returns cached texture without re-render', () => {
-  const manager = createManager()
-  const signHeadsRenderer = (manager as unknown as { signHeadsRenderer: { getSignTexture: Function } }).signHeadsRenderer
-  const pos = new Vec3(10, 64, 10)
+test('getSignTexture: same content at different positions shares one texture', () => {
+  const wr = createWorldRenderer()
   const blockEntity = { Text1: '{"text":"Hello"}' }
 
-  const tex1 = signHeadsRenderer.getSignTexture(pos, blockEntity, false)
-  const tex2 = signHeadsRenderer.getSignTexture(pos, blockEntity, false)
+  const tex1 = getSignTexture(wr, blockEntity, false)
+  const tex2 = getSignTexture(wr, { ...blockEntity }, false)
 
   expect(tex1).toBeDefined()
   expect(tex2).toBe(tex1)
   expect(renderSignMock).toHaveBeenCalledTimes(1)
-
-  manager.dispose()
 })
 
-test('getSignTexture: changed blockEntity disposes old texture and renders anew', () => {
-  const manager = createManager()
-  const signHeadsRenderer = (manager as unknown as { signHeadsRenderer: { getSignTexture: Function } }).signHeadsRenderer
-  const pos = new Vec3(10, 64, 10)
+test('getSignTexture: different text yields different textures', () => {
+  const wr = createWorldRenderer()
+
+  const tex1 = getSignTexture(wr, { Text1: '{"text":"Hello"}' }, false)!
+  const tex2 = getSignTexture(wr, { Text1: '{"text":"World"}' }, false)!
+
+  expect(tex2).not.toBe(tex1)
+  expect(renderSignMock).toHaveBeenCalledTimes(2)
+})
+
+test('releaseSignTexture: partial release keeps texture in cache', () => {
+  const wr = createWorldRenderer()
   const blockEntity = { Text1: '{"text":"Hello"}' }
 
-  const tex1 = signHeadsRenderer.getSignTexture(pos, blockEntity, false)!
+  const tex1 = getSignTexture(wr, blockEntity, false)!
+  const tex2 = getSignTexture(wr, blockEntity, false)!
+  expect(tex1).toBe(tex2)
+
   const disposeSpy = vi.spyOn(tex1, 'dispose')
+  releaseSignTexture(tex1)
 
-  const changed = { Text1: '{"text":"World"}' }
-  const tex2 = signHeadsRenderer.getSignTexture(pos, changed, false)
+  expect(disposeSpy).not.toHaveBeenCalled()
+  expect(getSignTexture(wr, blockEntity, false)).toBe(tex1)
+  expect(renderSignMock).toHaveBeenCalledTimes(1)
+})
 
-  expect(tex2).toBeDefined()
-  expect(tex2).not.toBe(tex1)
+test('releaseSignTexture: dispose at zero refcount removes cache entry', () => {
+  const wr = createWorldRenderer()
+  const blockEntity = { Text1: '{"text":"Hello"}' }
+
+  const tex = getSignTexture(wr, blockEntity, false)!
+  const disposeSpy = vi.spyOn(tex, 'dispose')
+
+  releaseSignTexture(tex)
   expect(disposeSpy).toHaveBeenCalledTimes(1)
-  expect(renderSignMock).toHaveBeenCalledTimes(2)
 
-  manager.dispose()
+  const tex2 = getSignTexture(wr, blockEntity, false)!
+  expect(tex2).not.toBe(tex)
+  expect(renderSignMock).toHaveBeenCalledTimes(2)
+})
+
+test('getSignTexture: key ignores irrelevant NBT fields', () => {
+  const wr = createWorldRenderer()
+  const base = { Text1: '{"text":"Hello"}', Color: 'black' }
+
+  const tex1 = getSignTexture(wr, base, false)!
+  const tex2 = getSignTexture(wr, { ...base, GlowingText: 1, is_waxed: 1 }, false)!
+
+  expect(tex2).toBe(tex1)
+  expect(renderSignMock).toHaveBeenCalledTimes(1)
+})
+
+test('getSignTexture: isHanging is part of cache key', () => {
+  const wr = createWorldRenderer()
+  const blockEntity = { Text1: '{"text":"Hello"}' }
+
+  const standing = getSignTexture(wr, blockEntity, false)!
+  const hanging = getSignTexture(wr, blockEntity, true)!
+
+  expect(hanging).not.toBe(standing)
+  expect(renderSignMock).toHaveBeenCalledTimes(2)
 })
