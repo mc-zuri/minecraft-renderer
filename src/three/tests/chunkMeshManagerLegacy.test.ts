@@ -183,6 +183,12 @@ function makeCullCamera (): THREE.PerspectiveCamera {
   return camera
 }
 
+function drainCubeUploads (manager: ChunkMeshManager): void {
+  const gb = manager.globalBlockBuffer
+  if (!gb) return
+  while (gb.hasPendingUploads()) gb.uploadDirtyRange()
+}
+
 function createManager (opts: ManagerOptions = {}): ChunkMeshManager {
   const scene = new THREE.Scene()
   const material = new THREE.MeshBasicMaterial()
@@ -250,6 +256,8 @@ test('ChunkMeshManager: hidden section excluded from draw spans', () => {
   expect(manager.globalLegacyBlendBuffer?.getVisibleIndexSpans().length).toBe(0)
 
   section.visible = true
+  const blendBuf = manager.globalLegacyBlendBuffer!
+  while (blendBuf.hasPendingUploads()) blendBuf.uploadDirtyRange()
   manager.updateSectionCullAndSort(camera, 8, 8, 20)
   expect(manager.globalLegacyBlendBuffer?.getVisibleIndexSpans().length).toBeGreaterThan(0)
 
@@ -351,6 +359,7 @@ test('ChunkMeshManager: hidden cube section excluded from draw spans', () => {
   manager.updateSection(key, makeShaderCubeOnlyGeometry())
   const section = manager.sectionObjects[key]!
   expect(manager.globalBlockBuffer?.hasSection(key)).toBe(true)
+  drainCubeUploads(manager)
 
   const camera = makeCullCamera()
   manager.updateSectionCullAndSort(camera, 8, 8, 20)
@@ -384,6 +393,7 @@ test('ChunkMeshManager: finishChunkDisplay reveals cube spans and marks cull dir
   expect(manager.sectionObjects[key]?.visible).toBe(true)
   expect(markCullDirtySpy).toHaveBeenCalled()
 
+  drainCubeUploads(manager)
   manager.updateSectionCullAndSort(camera, 8, 8, 20)
   expect(manager.globalBlockBuffer?.getVisibleSpans().length).toBeGreaterThan(0)
 
