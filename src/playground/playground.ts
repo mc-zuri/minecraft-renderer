@@ -15,7 +15,8 @@ playgroundGlobalUiState.scenes = [
   'frequentUpdates',
   'slabsOptimization',
   'allEntities',
-  'geometryExport'
+  'geometryExport',
+  'partialBlockCulling'
 ]
 playgroundGlobalUiState.selected = qsScene ?? 'main'
 

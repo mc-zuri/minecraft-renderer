@@ -9,6 +9,7 @@ import { INVISIBLE_BLOCKS } from './worldConstants'
 import { MesherGeometryOutput, HighestBlockInfo } from './shared'
 import { collectBlockEntityMetadata } from './blockEntityMetadata'
 import { preflatBlockCalculation, resolveBlockPropertiesForMeshing } from './blockPropertiesForMeshing'
+import { faceIsCulled, roundCardinalDir } from './faceOcclusion'
 
 export { preflatBlockCalculation, resolveBlockPropertiesForMeshing } from './blockPropertiesForMeshing'
 
@@ -260,44 +261,6 @@ function renderLiquid(
   }
 }
 
-const identicalCull = (currentElement: BlockElement, neighbor: Block, direction: Vec3) => {
-  const dirStr = `${direction.x},${direction.y},${direction.z}`
-  const lookForOppositeSide = {
-    '0,1,0': 'down',
-    '0,-1,0': 'up',
-    '1,0,0': 'east',
-    '-1,0,0': 'west',
-    '0,0,1': 'south',
-    '0,0,-1': 'north'
-  }[dirStr]!
-  const elemCompareForm = {
-    '0,1,0': (e: BlockElement) => `${e.from[0]},${e.from[2]}:${e.to[0]},${e.to[2]}`,
-    '0,-1,0': (e: BlockElement) => `${e.to[0]},${e.to[2]}:${e.from[0]},${e.from[2]}`,
-    '1,0,0': (e: BlockElement) => `${e.from[2]},${e.from[1]}:${e.to[2]},${e.to[1]}`,
-    '-1,0,0': (e: BlockElement) => `${e.to[2]},${e.to[1]}:${e.from[2]},${e.from[1]}`,
-    '0,0,1': (e: BlockElement) => `${e.from[1]},${e.from[2]}:${e.to[1]},${e.to[2]}`,
-    '0,0,-1': (e: BlockElement) => `${e.to[1]},${e.to[2]}:${e.from[1]},${e.from[2]}`
-  }[dirStr]!
-  const elementEdgeValidator = {
-    '0,1,0': (e: BlockElement) => currentElement.from[1] === 0 && e.to[2] === 16,
-    '0,-1,0': (e: BlockElement) => currentElement.from[1] === 0 && e.to[2] === 16,
-    '1,0,0': (e: BlockElement) => currentElement.from[0] === 0 && e.to[1] === 16,
-    '-1,0,0': (e: BlockElement) => currentElement.from[0] === 0 && e.to[1] === 16,
-    '0,0,1': (e: BlockElement) => currentElement.from[2] === 0 && e.to[0] === 16,
-    '0,0,-1': (e: BlockElement) => currentElement.from[2] === 0 && e.to[0] === 16
-  }[dirStr]!
-  const useVar = 0
-  const models = neighbor.models?.map(m => m[useVar] ?? m[0]) ?? []
-  // TODO we should support it! rewrite with optimizing general pipeline
-  if (models.some(m => m.x || m.y || m.z)) return
-  return models.every(model => {
-    return (model.elements ?? []).every(element => {
-      // todo check alfa on texture
-      return !!(element.faces[lookForOppositeSide]?.cullface && elemCompareForm(currentElement) === elemCompareForm(element) && elementEdgeValidator(element))
-    })
-  })
-}
-
 let needSectionRecomputeOnChange = false
 
 function renderElement(
@@ -315,21 +278,19 @@ function renderElement(
   const position = cursor
   // const key = `${position.x},${position.y},${position.z}`
   // if (!globalThis.allowedBlocks.includes(key)) return
-  const cullIfIdentical = block.name.includes('glass') || block.name.includes('ice')
-
   // eslint-disable-next-line guard-for-in
   for (const face in element.faces) {
     const eFace = element.faces[face]
     const { corners, mask1, mask2, side } = elemFaces[face]
     const dir = matmul3(globalMatrix, elemFaces[face].dir)
+    const worldDir = roundCardinalDir(dir)
 
-    tsLog(`[TS] Processing face ${face} at (${cursor.x}, ${cursor.y}, ${cursor.z}), dir=[${dir.join(',')}]`)
+    tsLog(`[TS] Processing face ${face} at (${cursor.x}, ${cursor.y}, ${cursor.z}), dir=[${worldDir.join(',')}]`)
 
     if (eFace.cullface) {
-      const neighbor = world.getBlock(cursor.plus(new Vec3(...dir)), blockProvider, {})
+      const neighbor = world.getBlock(cursor.plus(new Vec3(...worldDir)), blockProvider, {})
       if (neighbor) {
-        if (cullIfIdentical && neighbor.stateId === block.stateId) continue
-        if (!neighbor.transparent && (isCube(neighbor) || identicalCull(element, neighbor, new Vec3(...dir)))) continue
+        if (faceIsCulled(world.config.version, element, face, neighbor.stateId, block, blockProvider, worldDir, globalMatrix)) continue
       } else {
         needSectionRecomputeOnChange = true
         // continue

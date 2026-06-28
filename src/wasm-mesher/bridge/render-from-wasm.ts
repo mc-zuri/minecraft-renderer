@@ -16,6 +16,7 @@ import { SECTION_HEIGHT } from '../../mesher-shared/shared'
 import type { World } from '../../mesher-shared/world'
 import { resolveBlockPropertiesForMeshing } from '../../mesher-shared/blockPropertiesForMeshing'
 import { isSemiTransparentBlockName } from '../../mesher-shared/models'
+import { faceIsCulled } from '../../mesher-shared/faceOcclusion'
 import { buildShaderCubesFromWords, getShaderCubeResources, tryBuildShaderCubeInstances } from './shaderCubeBridge'
 import { getSideShading, vertexLightFromAo } from '../../mesher-shared/vertexShading'
 import tintsJson from 'minecraft-data/minecraft-data/data/pc/1.16.2/tints.json'
@@ -623,12 +624,45 @@ export function renderWasmOutputToGeometry(
     const cachedModel = getCachedBlockModel(blockStateId, version, blockProvider, PrismarineBlock, world, { x: bx, y: by, z: bz })
     if (!cachedModel) continue
 
+    const neighborStateIdCache = new Map<string, number | null>()
+
     if (shaderResources) {
       const modelVars = cachedModel.models[0]
       const model = modelVars?.[0]
       const element = model?.elements?.[0]
       if (model && element) {
         const doAO = (model as { ao?: boolean }).ao ?? cachedModel.boundingBox !== 'empty'
+
+        let forceCullMask = 0
+        if (world) {
+          const shaderCubeFaceNameToIndex: Record<string, number> = {
+            up: 0,
+            down: 1,
+            east: 2,
+            west: 3,
+            south: 4,
+            north: 5
+          }
+          for (const faceName of ['up', 'down', 'east', 'west', 'south', 'north'] as const) {
+            const faceIdx = shaderCubeFaceNameToIndex[faceName]
+            if ((block.visible_faces & (1 << faceIdx)) === 0) continue
+            const dir = elemFaces[faceName].dir as [number, number, number]
+            const dirKey = `${dir[0]},${dir[1]},${dir[2]}`
+            let neighborStateId = neighborStateIdCache.get(dirKey)
+            if (neighborStateId === undefined) {
+              const neighborBlock = world.getBlock(new Vec3(bx, by, bz).offset(...dir))
+              neighborStateId = neighborBlock?.stateId ?? null
+              neighborStateIdCache.set(dirKey, neighborStateId)
+            }
+            if (
+              neighborStateId !== null &&
+              faceIsCulled(version, element, faceName, neighborStateId, { stateId: blockStateId, name: prismBlock.name }, blockProvider, dir, null)
+            ) {
+              forceCullMask |= 1 << faceIdx
+            }
+          }
+        }
+
         const emitted = tryBuildShaderCubeInstances(
           block,
           {
@@ -644,7 +678,8 @@ export function renderWasmOutputToGeometry(
             biome,
             tintPalette: shaderResources.tintPalette,
             textureIndexMapping: shaderResources.textureIndexMapping,
-            doAO
+            doAO,
+            forceCullMask
           },
           shaderWordBuffer
         )
@@ -745,8 +780,30 @@ export function renderWasmOutputToGeometry(
           const maxy = element.to[1]
           const maxz = element.to[2]
 
-          if (matchingEFace.cullface && faceIdx !== undefined) {
-            if ((block.visible_faces & (1 << faceIdx)) === 0) {
+          if (faceIdx !== undefined && (block.visible_faces & (1 << faceIdx)) === 0) {
+            continue
+          }
+
+          if (matchingEFace.cullface && world) {
+            let neighborStateId = neighborStateIdCache.get(dirKey)
+            if (neighborStateId === undefined) {
+              const neighborBlock = world.getBlock(new Vec3(bx, by, bz).offset(...transformedDirI))
+              neighborStateId = neighborBlock?.stateId ?? null
+              neighborStateIdCache.set(dirKey, neighborStateId)
+            }
+            if (
+              neighborStateId !== null &&
+              faceIsCulled(
+                version,
+                element,
+                faceName,
+                neighborStateId,
+                { stateId: blockStateId, name: prismBlock.name },
+                blockProvider,
+                transformedDirI,
+                globalMatrix
+              )
+            ) {
               continue
             }
           }

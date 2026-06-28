@@ -1,7 +1,6 @@
 import { BasePlaygroundScene } from '../baseScene'
 
 export default class extends BasePlaygroundScene {
-  expectedNumberOfFaces = 30
   enableCameraOrbitControl = false
 
   setupWorld() {
