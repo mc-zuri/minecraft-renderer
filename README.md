@@ -2,7 +2,43 @@
 
 ![Minecraft Renderer](./logo.webp)
 
-A modular Minecraft world renderer with Three.js WebGL 2 backend. Designed for performance testing, experimentation, and integration into Minecraft clients.
+One of the best Minecraft world rendererers implemented from scratch. Uses Three.js WebGL 2 backend. Designed for performance testing, experimentation, and integration into Minecraft clients or other use cases for game world display.
+
+Features:
+
+- 💡 Full-featured: hand, third-person view, entities, debug features and even more!
+- ⚡️ Leverages all available WebGL 2 and WASM world meshing for the maximum performance
+- 📦 Implemented from scratch; small bundle size and runtime footprint
+- ⚙️ Easily customizable: modular architecture with Three.js API
+
+## Implemented Features
+
+- WASM mesher workers (default path) with legacy JS mesher fallback
+- Instanced shader-cube rendering for full blocks (`GlobalBlockBuffer`, one GPU draw)
+- Global legacy geometry buffer for models/stairs/slabs (merged indexed mesh, opaque + blend passes)
+- Block and sky lighting, smooth lighting, and vanilla vs high-contrast (default) face shading (`vanillaLook`)
+- Signs, banners, skulls, and other block-entity overlays
+- Entities: players with skins & animations, mobs, items, armor, text/item display
+- Day cycle, skybox, starfield, rain, fireworks
+- Third-person camera, view bobbing, holding block / hand
+- Optional off-thread graphics backend (render in a worker!)
+- Smooth lighting (lighting data has to be provided)
+
+### Browser support
+
+**Requires WebGL 2.0.** WebGL 1 is not supported as a full-feature path (shader cubes and several block shaders need WebGL2).
+
+| Browser              | Minimum version |
+| -------------------- | --------------- |
+| Chrome / Chromium    | 56+             |
+| Firefox              | 51+             |
+| Edge                 | 79+ (Chromium)  |
+| Safari (macOS / iOS) | 15.3+           |
+| Opera                | 43+             |
+
+**Not supported:** Safari before 15.
+
+Optional extensions (`WEBGL_multi_draw`, instanced base vertex) improve draw-call batching when present; the renderer falls back to capped multi-draw loops when they are missing.
 
 ## Architecture Overview
 
