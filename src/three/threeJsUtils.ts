@@ -8,6 +8,12 @@ export const disposeObject = (obj: THREE.Object3D, cleanTextures = false) => {
     obj.geometry?.dispose?.()
     obj.material?.dispose?.()
   }
+  if (obj instanceof THREE.SkinnedMesh) {
+    // SkinnedMesh skeletons are not scene-graph children, so the recursion below never reaches them.
+    // skeleton.dispose() frees the lazily-created bone DataTexture (Skeleton.computeBoneTexture),
+    // which otherwise leaks +1 GPU texture per entity on every F3+A reload (issue #56).
+    obj.skeleton?.dispose?.()
+  }
   if (obj.children) {
     // eslint-disable-next-line unicorn/no-array-for-each
     obj.children.forEach(child => disposeObject(child, cleanTextures))
