@@ -43,6 +43,9 @@ function processUpdateLightV17(rawPacket: Uint8Array, numSections: number): void
     })
     invalidateConversion(x, z)
     dirtyColumnSectionsForLightUpdate(x, z)
+    const hadColumn = !!world?.getColumn(x, z)
+    syncV17LightToColumn(x, z)
+    if (!hadColumn) pendingLightDirtyColumns.add(rawCacheKey(x, z))
   } catch (err) {
     console.warn('[WASM Mesher] parseUpdateLightV17 failed:', err)
   }
@@ -247,6 +250,44 @@ interface UpdateLightV17Entry {
   blockLight: Uint8Array
 }
 const updateLightV17Cache = new Map<string, UpdateLightV17Entry>()
+/** Columns that received `update_light` before the worker column existed. */
+const pendingLightDirtyColumns = new Set<string>()
+const _syncLightPos = new Vec3(0, 0, 0)
+
+function resolveUpdateLightV17Entry(x: number, z: number, chunk: any | undefined, worldMinY: number, worldMaxY: number): UpdateLightV17Entry | undefined {
+  const cached = updateLightV17Cache.get(rawCacheKey(x, z))
+  if (cached?.blockLight?.length) return cached
+  if (!chunk) return cached
+  const { result } = getOrConvertColumn(x, z, chunk, version, worldMinY, worldMaxY, () => convertChunkToWasm(chunk, version, x, z, worldMinY, worldMaxY), chunk)
+  return { blockLight: result.blockLight, skyLight: result.skyLight }
+}
+
+/** Write cached 1.17 `update_light` arrays into the worker prismarine column. */
+function syncV17LightToColumn(x: number, z: number): boolean {
+  if (!world) return false
+  const col = world.getColumn(x, z)
+  const entry = updateLightV17Cache.get(rawCacheKey(x, z))
+  if (!col || !entry) return false
+
+  const CHUNK_SIZE = 16
+  const minY = config?.worldMinY ?? 0
+  const maxY = config?.worldMaxY ?? 256
+  const { blockLight, skyLight } = entry
+
+  for (let y = minY; y < maxY; y++) {
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        const idx = lx + lz * CHUNK_SIZE + (y - minY) * CHUNK_SIZE * CHUNK_SIZE
+        if (idx >= blockLight.length) continue
+        _syncLightPos.set(lx, y, lz)
+        col.setBlockLight(_syncLightPos, blockLight[idx]!)
+        col.setSkyLight(_syncLightPos, skyLight[idx]!)
+      }
+    }
+  }
+
+  return true
+}
 
 // 1.16 path: pre-extracted section bytes + bit mask. Bit mask in 1.16
 // is a varint that fits in i32 (only 16 sections), so we accept it as a
@@ -624,7 +665,7 @@ const meshMultiColumnsFromParsedV16V17 = (
       bitMapLoHi[i * 2] = entry.bitMapLoHi[0]
       bitMapLoHi[i * 2 + 1] = entry.bitMapLoHi[1]
       if (i === 0) maxBitsPerBlock = entry.maxBitsPerBlock
-      const light = updateLightV17Cache.get(key)
+      const light = resolveUpdateLightV17Entry(chunksToUse[i].x, chunksToUse[i].z, chunksToUse[i].chunk, worldMinY, worldMaxY)
       skyLightList.push(light?.skyLight ?? new Uint8Array(0))
       blockLightList.push(light?.blockLight ?? new Uint8Array(0))
     } else {
@@ -719,6 +760,11 @@ const handleMessage = async (data: any) => {
       invalidateConversion(data.x, data.z)
       if (!world) break
       world.addColumn(data.x, data.z, data.chunk)
+      syncV17LightToColumn(data.x, data.z)
+      const lightKey = rawCacheKey(data.x, data.z)
+      if (pendingLightDirtyColumns.delete(lightKey) || updateLightV17Cache.has(lightKey)) {
+        dirtyColumnSectionsForLightUpdate(data.x, data.z)
+      }
       if (data.customBlockModels) {
         const chunkKey = `${data.x},${data.z}`
         world.customBlockModels.set(chunkKey, data.customBlockModels)
@@ -759,6 +805,7 @@ const handleMessage = async (data: any) => {
       updateLightV17Cache.delete(rawCacheKey(data.x, data.z))
       parsedV16Cache.delete(rawCacheKey(data.x, data.z))
       updateLightV16Cache.delete(rawCacheKey(data.x, data.z))
+      pendingLightDirtyColumns.delete(rawCacheKey(data.x, data.z))
       if (!world) break
       world.removeColumn(data.x, data.z)
       world.customBlockModels.delete(`${data.x},${data.z}`)
@@ -862,6 +909,7 @@ const handleMessage = async (data: any) => {
       rawMapChunkCache.clear()
       parsedV17Cache.clear()
       updateLightV17Cache.clear()
+      pendingLightDirtyColumns.clear()
       parsedV16Cache.clear()
       updateLightV16Cache.clear()
       globalVar.mcData = null
@@ -1067,7 +1115,7 @@ function processColumnTick() {
             wasmResult = meshColumnFromRawV18Plus(rawEntry, x, z, worldMinY, worldMaxY, meta)
             if (wasmResult) columnMeshPath = 'v18_fused'
           } else if (v17Entry) {
-            const v17Light = updateLightV17Cache.get(rawCacheKey(x, z))
+            const v17Light = resolveUpdateLightV17Entry(x, z, targetChunk, worldMinY, worldMaxY)
             wasmResult = meshColumnFromParsedV16V17(
               v17Entry.chunkData,
               v17Entry.bitMapLoHi,
@@ -1138,7 +1186,7 @@ function processColumnTick() {
             const cs = performance.now()
             const rawEntry = rawMapChunkCache.get(rawCacheKey(cx, cz))
             const v17Entry = parsedV17Cache.get(rawCacheKey(cx, cz))
-            const v17Light = updateLightV17Cache.get(rawCacheKey(cx, cz))
+            const v17Light = resolveUpdateLightV17Entry(cx, cz, chunk, worldMinY, worldMaxY)
             const v16Entry = parsedV16Cache.get(rawCacheKey(cx, cz))
             const v16Light = updateLightV16Cache.get(rawCacheKey(cx, cz))
 

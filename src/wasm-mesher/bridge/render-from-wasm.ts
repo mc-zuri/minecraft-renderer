@@ -745,8 +745,8 @@ export function renderWasmOutputToGeometry(
       }
 
       // Mirror JS mesher: doAO = model.ao ?? block.boundingBox !== 'empty'.
-      // When false, faces are emitted full-bright without AO/light sampling and without
-      // triangle-flip reordering (matches JS `light = 1` and standard winding).
+      // When false, faces skip AO but still use flat block/sky light from the
+      // neighbor cell (see models.ts baseChannels), not full-bright defaults.
       const doAO = (model as any).ao ?? cachedModel.boundingBox !== 'empty'
 
       for (const element of model.elements ?? []) {
@@ -827,6 +827,11 @@ export function renderWasmOutputToGeometry(
 
           const tint = getTint(matchingEFace, cachedModel.blockName, cachedModel.blockProps, biome, world)
 
+          const useModelLighting = (!cachedModel.isCube || globalMatrix != null) && world
+          const baseChannels = useModelLighting
+            ? world.getChannelLightNorm(new Vec3(bx, by, bz).offset(transformedDirI[0], transformedDirI[1], transformedDirI[2]))
+            : null
+
           const baseIndex = tgtPos.length / 3
           const computedAoValues = [3, 3, 3, 3]
           for (let cornerIdx = 0; cornerIdx < 4; cornerIdx++) {
@@ -844,11 +849,9 @@ export function renderWasmOutputToGeometry(
 
             tgtNorm.push(transformedDir[0], transformedDir[1], transformedDir[2])
 
-            const useModelLighting = (!cachedModel.isCube || globalMatrix != null) && world
-
             let ao = 3
-            let skyLightNorm = 1
-            let blockLightNorm = 0
+            let skyLightNorm = baseChannels?.sky ?? 1
+            let blockLightNorm = baseChannels?.block ?? 0
             const faceDir = transformedDirI as [number, number, number]
 
             if (!doAO) {
