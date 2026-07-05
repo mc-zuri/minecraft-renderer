@@ -5,10 +5,71 @@ import { setBlockStatesData as setMesherData } from '../../mesher-shared/models'
 import { defaultMesherConfig, type MesherGeometryOutput, SECTION_HEIGHT } from '../../mesher-shared/shared'
 import { worldColumnKey, World } from '../../mesher-shared/world'
 import { handleGetHeightmap, EMPTY_COLUMN_HEIGHTMAP_SENTINEL } from '../../mesher-shared/computeHeightmap'
+import mcData from 'minecraft-data'
 import { collectBlockEntityMetadata, type SignMeta, type HeadMeta, type BannerMeta } from '../../mesher-shared/blockEntityMetadata'
 import { SectionRequestTracker } from './mesherWasmRequestTracker'
 import { sectionYsForLightColumnDirty } from './mesherWasmLightDirty'
 import { CONVERSION_CACHE_LIMIT, clearConversionCache, getOrConvertColumn, invalidateConversion, setConversionCacheLimit } from './mesherWasmConversionCache'
+
+/**
+ * State ids of blocks that carry block-entity metadata the mesher must
+ * collect (signs/heads/banners — the name patterns collectBlockEntityMetadata
+ * matches). Used to SKIP the 4096-getBlock-per-section metadata walk for
+ * sections whose palette provably contains none of them — that walk
+ * dominated the post-mesh phase (~65% of column time) on ordinary terrain.
+ */
+let blockEntityStateIds: Set<number> | null = null
+let blockEntityStateIdsVersion = ''
+let beWalkTotal = 0
+let beWalkRan = 0
+let beWalkMs = 0
+function getBlockEntityStateIds(version: string): Set<number> {
+  if (blockEntityStateIds && blockEntityStateIdsVersion === version) return blockEntityStateIds
+  const ids = new Set<number>()
+  try {
+    for (const block of mcData(version).blocksArray as any[]) {
+      const n = block.name as string
+      const isBlockEntity =
+        n.includes('_sign') || n === 'sign' ||
+        n === 'player_head' || n === 'player_wall_head' ||
+        n.includes('_banner')
+      if (!isBlockEntity) continue
+      const min = block.minStateId ?? block.defaultState ?? block.id
+      const max = block.maxStateId ?? min
+      for (let id = min; id <= max; id++) ids.add(id)
+    }
+  } catch (err) {
+    console.warn('[WASM Mesher] block-entity state id table failed, metadata walk always runs:', err)
+  }
+  blockEntityStateIds = ids
+  blockEntityStateIdsVersion = version
+  return ids
+}
+
+/**
+ * Palette pre-check: can this section contain sign/head/banner blocks at
+ * all? Reads the prismarine-chunk section palette; unknown storage shapes
+ * conservatively return true (walk anyway).
+ */
+function sectionMayHaveBlockEntities(world: World, sx: number, sy: number, sz: number, minY: number): boolean {
+  const beIds = getBlockEntityStateIds(world.config.version)
+  if (beIds.size === 0) return true
+  const column: any = world.getColumn(Math.floor(sx / 16) * 16, Math.floor(sz / 16) * 16)
+  const section = column?.sections?.[(sy - minY) >> 4]
+  if (!section) return false // absent/all-air section: nothing to collect
+  const data = section.data ?? section
+  const palette = data?.palette
+  if (Array.isArray(palette)) {
+    for (const entry of palette) {
+      const stateId = typeof entry === 'number' ? entry : entry?.stateId
+      if (typeof stateId !== 'number') return true // unknown palette entry shape
+      if (beIds.has(stateId)) return true
+    }
+    return false
+  }
+  if (typeof data?.value === 'number') return beIds.has(data.value) // single-value section
+  return true // direct (unpaletted) storage: cannot rule out, walk
+}
 
 let wasm: typeof import('../runtime-build/wasm_mesher.js') | null = null
 let wasmInitialized = false
@@ -1389,15 +1450,28 @@ function processColumnTick() {
         const banners: Record<string, BannerMeta> = {}
         const beTarget = { signs, heads, banners }
         const beOpts = { disableBlockEntityTextures: world.config.disableBlockEntityTextures }
-        const cursor = new Vec3(0, 0, 0)
-        for (cursor.y = sy; cursor.y < sy + sectionHeight; cursor.y++) {
-          for (cursor.z = sz; cursor.z < sz + 16; cursor.z++) {
-            for (cursor.x = sx; cursor.x < sx + 16; cursor.x++) {
-              const b = world.getBlock(cursor)
-              if (!b) continue
-              collectBlockEntityMetadata(b, cursor.x, cursor.y, cursor.z, beTarget, beOpts, world)
+        // The metadata walk costs 4096 getBlock calls per section — skip it
+        // unless the section's palette can actually contain a block entity.
+        beWalkTotal++
+        if (beWalkTotal % 1024 === 0) {
+          console.log(
+            `[wasm-mesher] block-entity walks: ${beWalkRan}/${beWalkTotal} sections walked, ${beWalkMs.toFixed(1)}ms total walk time (rest skipped by palette check)`,
+          )
+        }
+        if (sectionMayHaveBlockEntities(world, sx, sy, sz, config?.worldMinY || 0)) {
+          beWalkRan++
+          const beT0 = performance.now()
+          const cursor = new Vec3(0, 0, 0)
+          for (cursor.y = sy; cursor.y < sy + sectionHeight; cursor.y++) {
+            for (cursor.z = sz; cursor.z < sz + 16; cursor.z++) {
+              for (cursor.x = sx; cursor.x < sx + 16; cursor.x++) {
+                const b = world.getBlock(cursor)
+                if (!b) continue
+                collectBlockEntityMetadata(b, cursor.x, cursor.y, cursor.z, beTarget, beOpts, world)
+              }
             }
           }
+          beWalkMs += performance.now() - beT0
         }
 
         let geometry: MesherGeometryOutput
@@ -1407,7 +1481,12 @@ function processColumnTick() {
         const hasLegacyMesh = hasOpaqueMesh || hasBlendMesh
         const hasShaderCubes = (exported?.shaderCubes?.count ?? 0) > 0
         if (exported && (hasLegacyMesh || hasShaderCubes)) {
-          const maxIndex = exported.geometry.indices.length > 0 ? Math.max(...exported.geometry.indices) : 0
+          // Loop, not Math.max(...spread): index arrays reach 100k+ entries
+          // where the spread both burns time and risks a stack overflow.
+          let maxIndex = 0
+          for (let i = 0; i < exported.geometry.indices.length; i++) {
+            if (exported.geometry.indices[i] > maxIndex) maxIndex = exported.geometry.indices[i]
+          }
           const using32Array = maxIndex > 65535
           geometry = {
             sectionYNumber: (sy - (config?.worldMinY || 0)) >> 4,
@@ -1450,7 +1529,10 @@ function processColumnTick() {
             }
           }
           if (exported.blendGeometry && hasBlendMesh) {
-            const blendMax = Math.max(...exported.blendGeometry.indices)
+            let blendMax = 0
+            for (let i = 0; i < exported.blendGeometry.indices.length; i++) {
+              if (exported.blendGeometry.indices[i] > blendMax) blendMax = exported.blendGeometry.indices[i]
+            }
             geometry.blend = {
               positions: new Float32Array(exported.blendGeometry.positions),
               normals: new Float32Array(exported.blendGeometry.normals),
