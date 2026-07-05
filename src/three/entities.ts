@@ -447,10 +447,11 @@ export class Entities {
           entity.position.set(this.worldRenderer.cameraWorldPos.x, this.worldRenderer.cameraWorldPos.y - yOffset, this.worldRenderer.cameraWorldPos.z)
 
           // Local-player posture follows the reactive state every frame (glide
-          // pitch needs fresh velocity anyway, so no subscription is used).
+          // pitch follows the camera look, so no subscription is used).
           const ps = this.worldRenderer.playerStateReactive
           const pose: PlayerPoseName = ps.gliding ? 'gliding' : ps.swimming ? 'swimming' : ps.sneaking ? 'sneaking' : 'standing'
-          this.setEntityPose('player_entity', pose, ps.velocity)
+          const lookPitch = this.worldRenderer.cameraShake.getBaseRotation().pitch
+          this.setEntityPose('player_entity', pose, ps.velocity, lookPitch)
         }
       }
 
@@ -789,19 +790,29 @@ export class Entities {
 
   /**
    * Set a player-model posture (orthogonal to playAnimation's locomotion).
-   * `velocity` only matters while gliding: it pitches the body along the
-   * flight path. Accepts 'player_entity' for the local player, though for the
-   * local player the reactive playerState (sneaking/swimming/gliding) is the
-   * usual driver — see render().
+   * While gliding the body pitches along the LOOK direction (vanilla
+   * behavior; positive-up radians), with velocity as a fallback for hosts
+   * that don't provide look pitch. Accepts 'player_entity' for the local
+   * player, though for the local player the reactive playerState
+   * (sneaking/swimming/gliding) is the usual driver — see render().
    */
-  setEntityPose(entityPlayerId: string | number, pose: PlayerPoseName, velocity?: { x: number; y: number; z: number }) {
+  setEntityPose(entityPlayerId: string | number, pose: PlayerPoseName, velocity?: { x: number; y: number; z: number }, lookPitch?: number) {
     const sceneEntity = entityPlayerId === 'player_entity' ? this.playerEntity : this.entities[entityPlayerId]
     const anim = sceneEntity?.playerObject?.animation as WalkingGeneralSwing | undefined
     if (!sceneEntity || !anim) return
 
     const poseChanged = anim.pose !== pose
     anim.pose = pose
-    anim.glidePitch = pose === 'gliding' && velocity ? Math.atan2(-velocity.y, Math.hypot(velocity.x, velocity.z)) : 0
+    if (pose !== 'gliding') {
+      anim.glidePitch = 0
+    } else if (typeof lookPitch === 'number' && Number.isFinite(lookPitch)) {
+      // look pitch is positive-up; glidePitch is positive-down (extra dive)
+      anim.glidePitch = -lookPitch
+    } else if (velocity) {
+      anim.glidePitch = Math.atan2(-velocity.y, Math.hypot(velocity.x, velocity.z))
+    } else {
+      anim.glidePitch = 0
+    }
 
     if (poseChanged) {
       // Player nametags are placed once at creation (see update()), so move
@@ -1052,7 +1063,7 @@ export class Entities {
 
     // Optional per-tick posture pushed by the host (see setEntityPose)
     if (isPlayerModel && (entity as any).pose !== undefined) {
-      this.setEntityPose(entity.id, (entity as any).pose, (entity as any).velocity)
+      this.setEntityPose(entity.id, (entity as any).pose, (entity as any).velocity, entity.pitch)
     }
 
     const meta = getGeneralEntitiesMetadata(entity, this.mcData)
