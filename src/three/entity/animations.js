@@ -31,17 +31,39 @@ export class WalkingGeneralSwing extends PlayerAnimation {
 
   isRunning = false
   isMoving = true
-  isCrouched = false
+
+  /**
+   * Body posture, orthogonal to the locomotion flags above.
+   * @type {'standing' | 'sneaking' | 'swimming' | 'gliding'}
+   */
+  pose = 'standing'
+  /** Extra body pitch (radians) past horizontal while gliding; derived from velocity. */
+  glidePitch = 0
+
+  /** Back-compat alias kept for playAnimation('crouch'/'crouchWalking') callers. */
+  get isCrouched() {
+    return this.pose === 'sneaking'
+  }
+
+  set isCrouched(v) {
+    if (v) this.pose = 'sneaking'
+    else if (this.pose === 'sneaking') this.pose = 'standing'
+  }
 
   _dt = 0
   _phase = 0
   _moveBlend = 0
+  _sneakBlend = 0
+  _swimBlend = 0
+  _glideBlend = 0
+  _glidePitchSmooth = 0
 
   /** @type {number | null} */
   _swingTime = null
   _swingDuration = 0.25
 
   /** @type {{
+    rootPos: any, rootRot: any,
     bodyPos: any, bodyRot: any,
     leftArmPos: any, leftArmRot: any,
     rightArmPos: any, rightArmRot: any,
@@ -70,6 +92,11 @@ export class WalkingGeneralSwing extends PlayerAnimation {
 
   _captureDefaults(player) {
     this._defaults = {
+      // PlayerObject root: swim/glide pivot the whole model (and running applies
+      // a roll), so it must be restored every frame like the individual bones.
+      rootPos: player.position.clone(),
+      rootRot: player.rotation.clone(),
+
       bodyPos: player.skin.body.position.clone(),
       bodyRot: player.skin.body.rotation.clone(),
 
@@ -97,6 +124,9 @@ export class WalkingGeneralSwing extends PlayerAnimation {
   _applyDefaults(player) {
     const d = this._defaults
     if (!d) return
+
+    player.position.copy(d.rootPos)
+    player.rotation.copy(d.rootRot)
 
     player.skin.body.position.copy(d.bodyPos)
     player.skin.body.rotation.copy(d.bodyRot)
@@ -131,13 +161,22 @@ export class WalkingGeneralSwing extends PlayerAnimation {
     const kMove = Math.min(1, dt * 20)
     this._moveBlend += (targetMove - this._moveBlend) * kMove
 
+    // ~100ms pose crossfades; all blends run simultaneously so e.g. swim->glide
+    // transitions smoothly instead of snapping through standing.
+    const kPose = Math.min(1, dt * 10)
+    const snap01 = v => (v < 0.001 ? 0 : v > 0.999 ? 1 : v)
+    this._sneakBlend = snap01(this._sneakBlend + ((this.pose === 'sneaking' ? 1 : 0) - this._sneakBlend) * kPose)
+    this._swimBlend = snap01(this._swimBlend + ((this.pose === 'swimming' ? 1 : 0) - this._swimBlend) * kPose)
+    this._glideBlend = snap01(this._glideBlend + ((this.pose === 'gliding' ? 1 : 0) - this._glideBlend) * kPose)
+    this._glidePitchSmooth += (this.glidePitch - this._glidePitchSmooth) * kPose
+
     const speed = this.isRunning ? 10 : 8
     this._phase += dt * speed * this._moveBlend
 
     const t = this._phase + (this.isRunning ? Math.PI * 0.5 : 0)
     let reset = false
 
-    applyCrouchPose(player, this.isCrouched ? 1 : 0)
+    applyCrouchPose(player, this._sneakBlend)
 
     const boundary = this.isRunning ? Math.cos(t) : Math.sin(t)
     if (Math.abs(boundary) < 0.02) {
@@ -188,6 +227,11 @@ export class WalkingGeneralSwing extends PlayerAnimation {
       const basicCapeRotationX = Math.PI * 0.06
       player.cape.rotation.x = Math.sin(t / 1.5) * 0.06 + basicCapeRotationX
     }
+
+    // Horizontal poses go last: they lerp the limbs away from whatever the
+    // walk/run swing above produced, so walking + swimming coexist.
+    applySwimPose(player, this._swimBlend, this._phase, this._moveBlend)
+    applyGlidePose(player, this._glideBlend, this._glidePitchSmooth)
 
     if (reset) {
       const cb = this.switchAnimationCallback
@@ -261,4 +305,82 @@ function applyCrouchPose(player, crouchBlend) {
 
   skin.rightLeg.position.z += -3.4500310377 * s
   skin.leftLeg.position.z += -3.4500310377 * s
+}
+
+// Model root sits at the model center, 16 units (1 block) above the feet at
+// blend 0. Swim/glide pivot around it and sink it so the horizontal body's
+// underside tracks the entity's 0.6-block-high AABB.
+const POSE_ROOT_DEFAULT_Y = 16
+const POSE_ROOT_HORIZONTAL_Y = 5
+
+/**
+ * Swim/crawl: body horizontal, alternate front-crawl arm stroke, flutter kick.
+ * Transition targets (root pitch, -PI/4 head, +PI/4 cape, root drop) follow
+ * skinview3d's SwimAnimation; the stroke reuses the walk phase so it stops
+ * with the entity.
+ */
+function applySwimPose(player, blend, phase, moveBlend) {
+  const b = clamp01(blend)
+  if (b <= 0.001) return
+  const skin = player?.skin
+  if (!skin) return
+
+  player.rotation.x += (Math.PI / 2) * b
+  player.position.y += (POSE_ROOT_HORIZONTAL_Y - POSE_ROOT_DEFAULT_Y) * b
+
+  skin.head.rotation.x = mix(skin.head.rotation.x, -Math.PI / 4, b)
+  player.cape.rotation.x = mix(player.cape.rotation.x, Math.PI / 4, b)
+
+  // Front-crawl stroke: arms sweep past the head alternately while moving,
+  // trail along the body when idle in water.
+  const stroke = phase * 0.75
+  const strokeAmp = 0.9 * moveBlend
+  const idleArmX = Math.PI * 0.9
+  skin.leftArm.rotation.x = mix(skin.leftArm.rotation.x, idleArmX + Math.sin(stroke) * strokeAmp, b)
+  skin.rightArm.rotation.x = mix(skin.rightArm.rotation.x, idleArmX + Math.sin(stroke + Math.PI) * strokeAmp, b)
+  skin.leftArm.rotation.z = mix(skin.leftArm.rotation.z, 0.12, b)
+  skin.rightArm.rotation.z = mix(skin.rightArm.rotation.z, -0.12, b)
+
+  // Flutter kick (17.2deg amplitude, from skinview3d), replacing the walk swing.
+  const kick = 0.3 * (0.35 + 0.65 * moveBlend)
+  skin.leftLeg.rotation.x = mix(skin.leftLeg.rotation.x, Math.cos(phase * 2 + Math.PI) * kick, b)
+  skin.rightLeg.rotation.x = mix(skin.rightLeg.rotation.x, Math.cos(phase * 2) * kick, b)
+  skin.leftLeg.rotation.z = mix(skin.leftLeg.rotation.z, -0.02, b)
+  skin.rightLeg.rotation.z = mix(skin.rightLeg.rotation.z, 0.02, b)
+}
+
+/**
+ * Elytra glide: body pitched along the velocity vector, arms tucked back,
+ * legs together, wings spread. Targets follow skinview3d's FlyingAnimation
+ * (head PI/4 - bodyPitch, arm z +-PI/4, wing x 0.349 / z PI/2).
+ */
+function applyGlidePose(player, blend, glidePitch) {
+  const b = clamp01(blend)
+  if (b <= 0.001) return
+  const skin = player?.skin
+  if (!skin) return
+
+  const bodyPitch = Math.PI / 2 + glidePitch
+  player.rotation.x += bodyPitch * b
+  player.position.y += (POSE_ROOT_HORIZONTAL_Y - POSE_ROOT_DEFAULT_Y) * b
+
+  skin.head.rotation.x = mix(skin.head.rotation.x, Math.PI / 4 - bodyPitch, b)
+
+  skin.leftArm.rotation.x = mix(skin.leftArm.rotation.x, 0.15, b)
+  skin.rightArm.rotation.x = mix(skin.rightArm.rotation.x, 0.15, b)
+  skin.leftArm.rotation.z = mix(skin.leftArm.rotation.z, Math.PI * 0.25, b)
+  skin.rightArm.rotation.z = mix(skin.rightArm.rotation.z, -Math.PI * 0.25, b)
+
+  skin.leftLeg.rotation.x = mix(skin.leftLeg.rotation.x, 0, b)
+  skin.rightLeg.rotation.x = mix(skin.rightLeg.rotation.x, 0, b)
+  skin.leftLeg.rotation.z = mix(skin.leftLeg.rotation.z, -0.02, b)
+  skin.rightLeg.rotation.z = mix(skin.rightLeg.rotation.z, 0.02, b)
+
+  const elytra = player?.elytra
+  if (elytra?.leftWing?.rotation) {
+    elytra.leftWing.rotation.x = mix(elytra.leftWing.rotation.x, 0.34906584, b)
+    elytra.leftWing.rotation.z = mix(elytra.leftWing.rotation.z, Math.PI / 2, b)
+    updateElytraRightWing(player)
+  }
+  player.cape.rotation.x = mix(player.cape.rotation.x, Math.PI * 0.1, b)
 }

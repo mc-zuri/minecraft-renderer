@@ -33,6 +33,16 @@ export type EntityModelOverridePart = {
   metadata?: any
 }
 
+export type PlayerPoseName = 'standing' | 'sneaking' | 'swimming' | 'gliding'
+
+/** Vanilla AABB height per pose, used for nametag placement (blocks). */
+const PLAYER_POSE_HEIGHT: Record<PlayerPoseName, number> = {
+  standing: 1.8,
+  sneaking: 1.5,
+  swimming: 0.6,
+  gliding: 0.6
+}
+
 // Type for entity metadata - simplified version
 type EntityMetadataVersions = {
   [key: string]: any
@@ -435,6 +445,12 @@ export class Entities {
         if (thirdPerson) {
           const yOffset = this.worldRenderer.playerStateReactive.eyeHeight
           entity.position.set(this.worldRenderer.cameraWorldPos.x, this.worldRenderer.cameraWorldPos.y - yOffset, this.worldRenderer.cameraWorldPos.z)
+
+          // Local-player posture follows the reactive state every frame (glide
+          // pitch needs fresh velocity anyway, so no subscription is used).
+          const ps = this.worldRenderer.playerStateReactive
+          const pose: PlayerPoseName = ps.gliding ? 'gliding' : ps.swimming ? 'swimming' : ps.sneaking ? 'sneaking' : 'standing'
+          this.setEntityPose('player_entity', pose, ps.velocity)
         }
       }
 
@@ -463,6 +479,12 @@ export class Entities {
 
       if (entity.visible) {
         this.syncArmorPositions(entity)
+
+        if (this.debugMode === 'basic') {
+          // Recompute so the debug box follows animated poses (sneak/swim/glide)
+          const boxHelper = entity.children.find(c => c.name === 'debug') as THREE.BoxHelper | undefined
+          boxHelper?.update()
+        }
       }
 
       if (isPlayerEntity && entity.visible) {
@@ -765,6 +787,32 @@ export class Entities {
     this.applyMovementAnimation(playerObject, animation)
   }
 
+  /**
+   * Set a player-model posture (orthogonal to playAnimation's locomotion).
+   * `velocity` only matters while gliding: it pitches the body along the
+   * flight path. Accepts 'player_entity' for the local player, though for the
+   * local player the reactive playerState (sneaking/swimming/gliding) is the
+   * usual driver — see render().
+   */
+  setEntityPose(entityPlayerId: string | number, pose: PlayerPoseName, velocity?: { x: number; y: number; z: number }) {
+    const sceneEntity = entityPlayerId === 'player_entity' ? this.playerEntity : this.entities[entityPlayerId]
+    const anim = sceneEntity?.playerObject?.animation as WalkingGeneralSwing | undefined
+    if (!sceneEntity || !anim) return
+
+    const poseChanged = anim.pose !== pose
+    anim.pose = pose
+    anim.glidePitch = pose === 'gliding' && velocity ? Math.atan2(-velocity.y, Math.hypot(velocity.x, velocity.z)) : 0
+
+    if (poseChanged) {
+      // Player nametags are placed once at creation (see update()), so move
+      // them to the posed AABB height explicitly.
+      const heightUnits = PLAYER_POSE_HEIGHT[pose] * 16
+      sceneEntity.traverse(c => {
+        if (c.name === 'nametag') c.position.y = heightUnits + 3
+      })
+    }
+  }
+
   parseEntityLabel(jsonLike) {
     if (!jsonLike) return
     try {
@@ -1001,6 +1049,11 @@ export class Entities {
 
     // Update equipment
     this.updateEntityEquipment(e, entity)
+
+    // Optional per-tick posture pushed by the host (see setEntityPose)
+    if (isPlayerModel && (entity as any).pose !== undefined) {
+      this.setEntityPose(entity.id, (entity as any).pose, (entity as any).velocity)
+    }
 
     const meta = getGeneralEntitiesMetadata(entity, this.mcData)
 

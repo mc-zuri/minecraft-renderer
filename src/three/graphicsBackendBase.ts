@@ -32,6 +32,7 @@ export const getBackendMethods = (worldRenderer: WorldRendererThree): any => {
     updateCustomBlock: worldRenderer.updateCustomBlock.bind(worldRenderer),
     getBlockInfo: worldRenderer.getBlockInfo.bind(worldRenderer),
     playEntityAnimation: worldRenderer.entities.playAnimation.bind(worldRenderer.entities),
+    setEntityPose: worldRenderer.entities.setEntityPose.bind(worldRenderer.entities),
     damageEntity: worldRenderer.entities.handleDamageEvent.bind(worldRenderer.entities),
     updatePlayerSkin: worldRenderer.entities.updatePlayerSkin.bind(worldRenderer.entities),
     applyTemporaryPlayerSkinOverride: worldRenderer.entities.applyTemporaryPlayerSkinOverride.bind(worldRenderer.entities),

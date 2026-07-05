@@ -34,8 +34,12 @@ export const getInitialPlayerState = () =>
     movementState: 'NOT_MOVING' as MovementState,
     onGround: true,
     sneaking: false,
+    swimming: false,
+    gliding: false,
     flying: false,
     sprinting: false,
+    /** Blocks/tick; drives the glide body pitch of the local player model. */
+    velocity: { x: 0, y: 0, z: 0 },
     walkDist: 0,
     prevWalkDist: 0,
     bob: 0,
