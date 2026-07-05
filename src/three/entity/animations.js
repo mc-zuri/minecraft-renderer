@@ -168,7 +168,10 @@ export class WalkingGeneralSwing extends PlayerAnimation {
     this._sneakBlend = snap01(this._sneakBlend + ((this.pose === 'sneaking' ? 1 : 0) - this._sneakBlend) * kPose)
     this._swimBlend = snap01(this._swimBlend + ((this.pose === 'swimming' ? 1 : 0) - this._swimBlend) * kPose)
     this._glideBlend = snap01(this._glideBlend + ((this.pose === 'gliding' ? 1 : 0) - this._glideBlend) * kPose)
-    this._glidePitchSmooth += (this.glidePitch - this._glidePitchSmooth) * kPose
+    // Clamp the extra glide pitch so steep dives don't fold the model into
+    // the ground (total body pitch stays within ~30..135 degrees).
+    const glideTarget = Math.max(-Math.PI / 3, Math.min(Math.PI / 4, this.glidePitch))
+    this._glidePitchSmooth += (glideTarget - this._glidePitchSmooth) * kPose
 
     const speed = this.isRunning ? 10 : 8
     this._phase += dt * speed * this._moveBlend
@@ -362,7 +365,10 @@ function applyGlidePose(player, blend, glidePitch) {
 
   const bodyPitch = Math.PI / 2 + glidePitch
   player.rotation.x += bodyPitch * b
-  player.position.y += (POSE_ROOT_HORIZONTAL_Y - POSE_ROOT_DEFAULT_Y) * b
+  // Lift the pivot with the pitch so the leading end (head when diving, legs
+  // when climbing) stays above the feet/ground instead of clipping into it.
+  const pitchLift = Math.sin(Math.min(Math.abs(glidePitch), Math.PI / 2)) * 12
+  player.position.y += (POSE_ROOT_HORIZONTAL_Y + pitchLift - POSE_ROOT_DEFAULT_Y) * b
 
   skin.head.rotation.x = mix(skin.head.rotation.x, Math.PI / 4 - bodyPitch, b)
 

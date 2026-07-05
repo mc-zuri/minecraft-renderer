@@ -91,6 +91,16 @@ export default class extends BasePlaygroundScene {
   override renderFinish(): void {
     this.worldRenderer?.entities.clear()
     this.updateIntervalId ??= setInterval(() => this.emitEntities(), 100)
+
+    // Frame the pose row (same approach as highPosEntityUpdates)
+    if (this.camera && this.controls) {
+      const lookAt = this.targetPos.offset(5, 1, 2)
+      this.controls.target.set(lookAt.x, lookAt.y, lookAt.z)
+      this.camera.position.set(lookAt.x, lookAt.y + 3, lookAt.z + 10)
+      this.camera.lookAt(lookAt.x, lookAt.y, lookAt.z)
+      this.controls.update()
+      this.syncCameraToBackend()
+    }
   }
 
   override sceneReset(): void {
