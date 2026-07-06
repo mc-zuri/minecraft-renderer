@@ -68,6 +68,13 @@ export class WorldRendererThree extends WorldRendererCommon {
   itemsTexture!: THREE.Texture
   cursorBlock: CursorBlock
   onRender: Array<(deltaTime: number) => void> = []
+  /**
+   * Runs at the top of render(), AFTER the frame's global tween.update()
+   * (documentRenderer.frameRender) and BEFORE entities/camera are consumed —
+   * the slot for same-frame anchoring (e.g. seating the player on a tweened
+   * vehicle). onRender by contrast fires after the draw, one frame late.
+   */
+  onBeforeEntitiesRender: Array<(deltaTime: number) => void> = []
   private lastRenderTime = 0
   private lastSciFiTickMs = 0
   private animatedFov = 0
@@ -1145,15 +1152,26 @@ export class WorldRendererThree extends WorldRendererCommon {
       }
 
       this.currentPosTween?.stop()
-      // Use instant camera updates (0 delay) in playground mode when camera controls are enabled
-      const tweenDelay = this.displayOptions.inWorldRenderingConfig.instantCameraUpdate ? 0 : this.playerStateUtils.isSpectatingEntity() ? 150 : 50
-      this.currentPosTween = new tweenJs.Tween(this.cameraWorldPos)
-        .to({ x: pos.x, y: pos.y, z: pos.z }, tweenDelay)
-        .onUpdate(() => {
-          this.sceneOrigin.update(this.cameraWorldPos.x, this.cameraWorldPos.y, this.cameraWorldPos.z)
-          this.cameraObject.position.set(0, 0, 0)
-        })
-        .start()
+      if (this.displayOptions.inWorldRenderingConfig.instantCameraUpdate) {
+        // Truly instant: a 0ms tween still waits for the NEXT frame's global
+        // tween.update() — a full frame of camera latency. Same-frame writes
+        // matter for callers anchoring the camera to tweened objects
+        // (onBeforeEntitiesRender vehicle seating).
+        this.cameraWorldPos.x = pos.x
+        this.cameraWorldPos.y = pos.y
+        this.cameraWorldPos.z = pos.z
+        this.sceneOrigin.update(pos.x, pos.y, pos.z)
+        this.cameraObject.position.set(0, 0, 0)
+      } else {
+        const tweenDelay = this.playerStateUtils.isSpectatingEntity() ? 150 : 50
+        this.currentPosTween = new tweenJs.Tween(this.cameraWorldPos)
+          .to({ x: pos.x, y: pos.y, z: pos.z }, tweenDelay)
+          .onUpdate(() => {
+            this.sceneOrigin.update(this.cameraWorldPos.x, this.cameraWorldPos.y, this.cameraWorldPos.z)
+            this.cameraObject.position.set(0, 0, 0)
+          })
+          .start()
+      }
       // this.freeFlyState.position = pos
     }
 
@@ -1281,6 +1299,10 @@ export class WorldRendererThree extends WorldRendererCommon {
       const size = this.renderer.getSize(new THREE.Vector2())
       this.camera.aspect = size.width / size.height
       this.camera.updateProjectionMatrix()
+    }
+
+    for (const hook of this.onBeforeEntitiesRender) {
+      hook(deltaTime)
     }
 
     let entitiesRenderMs = 0
