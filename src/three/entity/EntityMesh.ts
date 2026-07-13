@@ -7,6 +7,7 @@ import ocelotPng from 'mc-assets/dist/other-textures/latest/entity/cat/ocelot.pn
 import arrowTexture from 'mc-assets/dist/other-textures/1.21.2/entity/projectiles/arrow.png'
 import spectralArrowTexture from 'mc-assets/dist/other-textures/1.21.2/entity/projectiles/spectral_arrow.png'
 import tippedArrowTexture from 'mc-assets/dist/other-textures/1.21.2/entity/projectiles/tipped_arrow.png'
+import fishingHookTexture from 'mc-assets/dist/other-textures/latest/entity/fishing_hook.png'
 import { loadNearestFilterTexture, loadTexture } from '../threeJsUtils'
 import { WorldRendererThree } from '../worldRendererThree'
 import entities from './entities.json'
@@ -45,9 +46,14 @@ interface JsonBone {
 interface JsonCube {
   origin: [number, number, number]
   size: [number, number, number]
-  uv: [number, number]
+  uv: [number, number] | Partial<Record<keyof typeof elemFaces, JsonFaceUv>>
   inflate?: number
   rotation?: [number, number, number]
+}
+
+interface JsonFaceUv {
+  uv: [number, number]
+  uv_size?: [number, number]
 }
 
 interface JsonModel {
@@ -187,7 +193,12 @@ function addCube(
     cubeRotation.y = (-cube.rotation[1] * Math.PI) / 180
     cubeRotation.z = (-cube.rotation[2] * Math.PI) / 180
   }
-  for (const { dir, corners, u0, v0, u1, v1 } of Object.values(elemFaces)) {
+  const perFaceUv = Array.isArray(cube.uv) ? null : cube.uv
+  for (const [faceName, { dir, corners, u0, v0, u1, v1 }] of Object.entries(elemFaces)) {
+    const faceUv = perFaceUv?.[faceName as keyof typeof elemFaces]
+    // Modern Bedrock geometry may specify only the faces that exist. This is
+    // also how zero-thickness fishing-hook planes select their visible side.
+    if (perFaceUv && !faceUv) continue
     const ndx = Math.floor(attr.positions.length / 3)
 
     const eastOrWest = dir[0] !== 0
@@ -195,12 +206,23 @@ function addCube(
     for (const pos of corners) {
       let u: number
       let v: number
-      if (sameTextureForAllFaces) {
-        u = (cube.uv[0] + pos[3] * cube.size[0]) / texWidth
-        v = (cube.uv[1] + pos[4] * cube.size[1]) / texHeight
+      if (faceUv) {
+        const defaultSize: [number, number] = dir[1] !== 0
+          ? [cube.size[0], cube.size[2]]
+          : dir[0] !== 0
+            ? [cube.size[2], cube.size[1]]
+            : [cube.size[0], cube.size[1]]
+        const [sizeU, sizeV] = faceUv.uv_size ?? defaultSize
+        u = (faceUv.uv[0] + pos[3] * sizeU) / texWidth
+        v = (faceUv.uv[1] + pos[4] * sizeV) / texHeight
+      } else if (sameTextureForAllFaces) {
+        const uv = cube.uv as [number, number]
+        u = (uv[0] + pos[3] * cube.size[0]) / texWidth
+        v = (uv[1] + pos[4] * cube.size[1]) / texHeight
       } else {
-        u = (cube.uv[0] + dot(pos[3] ? u1 : u0, cube.size)) / texWidth
-        v = (cube.uv[1] + dot(pos[4] ? v1 : v0, cube.size)) / texHeight
+        const uv = cube.uv as [number, number]
+        u = (uv[0] + dot(pos[3] ? u1 : u0, cube.size)) / texWidth
+        v = (uv[1] + dot(pos[4] ? v1 : v0, cube.size)) / texHeight
       }
       // if (isNaN(u) || isNaN(v)) {
       //   errors.push(`NaN u: ${u}, v: ${v}`)
@@ -439,6 +461,12 @@ const getEntity = (name: string) => {
   return entities[name]
 }
 
+/** Entity JSON texture paths historically relied on a separately served
+ * resource-pack directory. Bundle assets required by standalone clients. */
+const bundledEntityTextures: Record<string, Record<string, string>> = {
+  fishing_bobber: { default: fishingHookTexture }
+}
+
 const scaleEntity: Record<string, number> = {
   zombie: 1.85,
   husk: 1.85,
@@ -662,7 +690,7 @@ export class EntityMesh {
 
     this.mesh = new THREE.Object3D()
     for (const [name, jsonModel] of Object.entries(e.geometry)) {
-      const texture = overrides.textures?.[name] ?? e.textures[name]
+      const texture = overrides.textures?.[name] ?? bundledEntityTextures[type]?.[name] ?? e.textures[name]
       if (!texture) continue
       // console.log(JSON.stringify(jsonModel, null, 2))
       const mesh = getMesh(
