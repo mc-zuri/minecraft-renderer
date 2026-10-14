@@ -241,14 +241,32 @@ pub fn parse_container(
     max_bits_local: u8,
     global_bits: u8,
 ) -> io::Result<Container> {
+    parse_container_sized(reader, max_bits_local, global_bits, None)
+}
+
+/// Parse a palette container whose data array may carry no length.
+///
+/// 1.21.5+ (protocol 770+) map_chunk sections drop the long count before the
+/// data array, and the single-value container's empty array with it. The
+/// count follows from the container's capacity (4096 blocks or 64 biomes) and
+/// the bits per value on the wire. Pass `Some(capacity)` for that layout and
+/// `None` for the length-prefixed one.
+pub fn parse_container_sized(
+    reader: &mut PacketReader,
+    max_bits_local: u8,
+    global_bits: u8,
+    unprefixed_capacity: Option<usize>,
+) -> io::Result<Container> {
     let bits_per_value = reader.read_u8()?;
     if bits_per_value == 0 {
         let value = reader.read_varint()? as u32;
-        let _size_prefix = reader.read_u8()?; // always 0 for non-1.21.5+
+        if unprefixed_capacity.is_none() {
+            let _size_prefix = reader.read_u8()?; // always 0
+        }
         return Ok(Container::Single(value));
     }
     if bits_per_value > max_bits_local {
-        let longs = reader.read_varint()? as usize;
+        let longs = read_long_count(reader, bits_per_value, unprefixed_capacity)?;
         let data = read_bit_array_longs_no_span(reader, longs)?;
         return Ok(Container::Direct { data, bits_per_value: global_bits });
     }
@@ -257,9 +275,21 @@ pub fn parse_container(
     for _ in 0..palette_len {
         palette.push(reader.read_varint()? as u32);
     }
-    let longs = reader.read_varint()? as usize;
+    let longs = read_long_count(reader, bits_per_value, unprefixed_capacity)?;
     let data = read_bit_array_longs_no_span(reader, longs)?;
     Ok(Container::Indirect { palette, data, bits_per_value })
+}
+
+fn read_long_count(reader: &mut PacketReader, bits_per_value: u8, unprefixed_capacity: Option<usize>) -> io::Result<usize> {
+    match unprefixed_capacity {
+        Some(capacity) => {
+            if bits_per_value > 64 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("bits per value {} > 64", bits_per_value)));
+            }
+            Ok(capacity.div_ceil(64 / bits_per_value as usize))
+        }
+        None => Ok(reader.read_varint()? as usize),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -565,6 +595,23 @@ pub fn read_i64_array(r: &mut PacketReader) -> io::Result<Vec<i64>> {
     Ok(out)
 }
 
+/// Read a BitSet sent as a byte array prefixed by a VarInt count, the 26.3+
+/// (protocol 777+) light mask encoding. Bit `i` is bit `i % 8` of byte `i / 8`
+/// (java.util.BitSet.valueOf(byte[])). Returns the same longs the long array
+/// encoding of that BitSet decodes to, so both feed `build_full_column_light`.
+pub fn read_byte_array_bitset(r: &mut PacketReader) -> io::Result<Vec<i64>> {
+    let n = r.read_varint()? as usize;
+    let bytes = r.read_bytes(n)?;
+    Ok(bytes
+        .chunks(8)
+        .map(|chunk| {
+            let mut long = [0u8; 8];
+            long[..chunk.len()].copy_from_slice(chunk);
+            i64::from_le_bytes(long)
+        })
+        .collect())
+}
+
 /// Read the sky/blockLight wire field: VarInt count + array of (VarInt size + bytes[size]).
 /// In practice each inner buffer is exactly 2048 bytes (one nibble per block).
 pub fn read_light_arrays(r: &mut PacketReader) -> io::Result<Vec<Vec<u8>>> {
@@ -614,6 +661,53 @@ mod tests {
     /// border below the chunk). 16 bits: 0b10 = 2.
     fn one_section_mask() -> Vec<u32> { vec![2u32, 0u32] }
     fn empty_mask_zero() -> Vec<u32> { vec![0u32, 0u32] }
+
+    #[test]
+    fn unprefixed_single_value_container_has_no_trailing_array() {
+        // 1.21.5+: bits 0, value 9, and nothing after it
+        let bytes = [0u8, 9, 0xAA];
+        let mut r = PacketReader::new(&bytes);
+        let container = parse_container_sized(&mut r, MAX_BITS_PER_BLOCK, 15, Some(BLOCK_SECTION_VOLUME)).unwrap();
+        assert_eq!(container.get(4095), 9);
+        assert_eq!(r.position(), 2);
+    }
+
+    #[test]
+    fn unprefixed_indirect_container_derives_its_long_count() {
+        // 4 bits per block: 16 blocks per long, 256 longs for a section, and no count on the wire
+        let mut bytes = vec![4u8, 2, 5, 7]; // bits, palette [5, 7]
+        let mut long = vec![0u8; 8];
+        long[7] = 0x10; // block 0 -> palette 0, block 1 -> palette 1
+        bytes.extend_from_slice(&long);
+        bytes.extend_from_slice(&vec![0u8; 255 * 8]);
+        bytes.push(0xAA);
+        let mut r = PacketReader::new(&bytes);
+        let container = parse_container_sized(&mut r, MAX_BITS_PER_BLOCK, 15, Some(BLOCK_SECTION_VOLUME)).unwrap();
+        assert_eq!([container.get(0), container.get(1), container.get(4095)], [5, 7, 5]);
+        assert_eq!(r.position(), bytes.len() - 1);
+    }
+
+    #[test]
+    fn unprefixed_biome_container_uses_the_biome_capacity() {
+        // 1 bit per biome: 64 biomes fit in a single long
+        let mut bytes = vec![1u8, 2, 3, 4];
+        bytes.extend_from_slice(&0x8000_0000_0000_0001u64.to_be_bytes());
+        let mut r = PacketReader::new(&bytes);
+        let container = parse_container_sized(&mut r, MAX_BITS_PER_BIOME, 6, Some(BIOME_SECTION_VOLUME)).unwrap();
+        assert_eq!([container.get(0), container.get(1), container.get(63)], [4, 3, 4]);
+        assert_eq!(r.position(), bytes.len());
+    }
+
+    #[test]
+    fn byte_array_bitset_matches_the_long_array_encoding() {
+        // bits 1 and 64: byte 0 = 0x02, byte 8 = 0x01
+        let bytes = [9u8, 0x02, 0, 0, 0, 0, 0, 0, 0, 0x01];
+        let mut r = PacketReader::new(&bytes);
+        assert_eq!(read_byte_array_bitset(&mut r).unwrap(), vec![2i64, 1]);
+        assert_eq!(r.position(), bytes.len());
+        let mut empty = PacketReader::new(&[0u8]);
+        assert!(read_byte_array_bitset(&mut empty).unwrap().is_empty());
+    }
 
     #[test]
     fn long_encoded_true_mirrors_x_within_z_row() {
