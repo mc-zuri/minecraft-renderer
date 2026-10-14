@@ -123,7 +123,8 @@
     "overrides": {
       "prismarine-block": "github:zardoy/prismarine-block#next-era",
       "prismarine-world": "github:zardoy/prismarine-world#next-era",
-      "@types/three": "0.184.0"
+      "@types/three": "0.184.0",
+      "prismarine-chunk": "file:../prismarine-chunk"
     },
     "ignoredBuiltDependencies": [
       "core-js"
