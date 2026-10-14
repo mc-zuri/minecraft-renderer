@@ -87,7 +87,31 @@ export function matmulmat3(a, b) {
   return te
 }
 
+/**
+ * 26.x element rotation given as degrees about each axis instead of axis/angle, applied like vanilla's
+ * rotationZYX(z, y, x): x first, then y, then z.
+ */
+function buildXyzElementRotation(rotation) {
+  // matmulmat3(a, b) is b·a in matmul3's convention, so this is Rz·Ry·Rx
+  let localMatrix = matmulmat3(
+    matmulmat3(buildRotationMatrix('x', rotation.x ?? 0), buildRotationMatrix('y', rotation.y ?? 0)),
+    buildRotationMatrix('z', rotation.z ?? 0)
+  )
+  if (rotation.rescale) {
+    // vanilla CuboidRotation: scale each axis by 1 / its largest component once rotated, then rotate (R·S)
+    const scale = [0, 1, 2].map(axis => 1 / Math.max(...[0, 1, 2].map(row => Math.abs(localMatrix[row][axis]))))
+    const scaleMatrix = [
+      [scale[0], 0, 0],
+      [0, scale[1], 0],
+      [0, 0, scale[2]]
+    ]
+    localMatrix = matmulmat3(scaleMatrix, localMatrix)
+  }
+  return { localMatrix, localShift: vecsub3(rotation.origin, matmul3(localMatrix, rotation.origin)) }
+}
+
 export function buildElementRotation(rotation) {
+  if (rotation.axis === undefined) return buildXyzElementRotation(rotation)
   let localMatrix = buildRotationMatrix(rotation.axis, rotation.angle)
   let localShift = vecsub3(rotation.origin, matmul3(localMatrix, rotation.origin))
 
