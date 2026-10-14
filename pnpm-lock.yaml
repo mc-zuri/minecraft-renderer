@@ -125,8 +125,8 @@ importers:
         specifier: ^4.17.21
         version: 4.17.21
       mc-assets:
-        specifier: ^0.2.72
-        version: 0.2.72
+        specifier: ^0.2.88
+        version: 0.2.88
       mineflayer:
         specifier: ^4.33.0
         version: 4.33.0
@@ -1595,8 +1595,8 @@ packages:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
 
-  mc-assets@0.2.72:
-    resolution: {integrity: sha512-wL9/kSkxlgQxWiLERO0vVW6GUMFZDc5iDjRDZru6xRue+KnFTUOmkaglf/ZVKiD2yjoSYrrJbvATkog5VSuZ3Q==}
+  mc-assets@0.2.88:
+    resolution: {integrity: sha512-KjZL3gb4OKW6TVvpP1M4Mp9CQbbPDQ8H7l4eWtkj55bDEQ04Hjfz166gY86Idy9lXr6xXSxHIhJdsPmdLdeQNg==}
     engines: {node: '>=18.0.0'}
 
   mc-bridge@0.1.3:
@@ -3901,7 +3901,7 @@ snapshots:
 
   math-intrinsics@1.1.0: {}
 
-  mc-assets@0.2.72:
+  mc-assets@0.2.88:
     dependencies:
       maxrects-packer: '@zardoy/maxrects-packer@2.7.4'
       zod: 3.25.76
