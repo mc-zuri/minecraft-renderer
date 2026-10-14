@@ -337,13 +337,13 @@ pub fn assemble_light_full_column(
         if !in_chunk { continue; }
         let s = section_idx_in_chunk as usize;
         let base = s * 16 * 256;
-        // BitArrayNoSpan stores 16 nibbles per i64. For 1.18+ map_chunk and
-        // for 1.16 the wire writes those longs as 8 big-endian bytes — so
-        // within each 8-byte run, byte offset 0 holds nibble positions 14-15
-        // and byte offset 7 holds positions 0-1 (long_encoded = true). For
-        // 1.17 update_light the wire payload is the BitArrayNoSpan internal
-        // byte buffer in *natural* order: byte i holds blocks 2i (low nibble)
-        // and 2i+1 (high nibble) directly (long_encoded = false). Mismatching
+        // BitArrayNoSpan stores 16 nibbles per i64. prismarine-chunk light
+        // dumps write those longs as 8 big-endian bytes — so within each
+        // 8-byte run, byte offset 0 holds nibble positions 14-15 and byte
+        // offset 7 holds positions 0-1 (long_encoded = true). Packets from a
+        // server (1.17 update_light, 1.18+ map_chunk) carry vanilla DataLayer
+        // bytes in *natural* order: byte i holds blocks 2i (low nibble) and
+        // 2i+1 (high nibble) directly (long_encoded = false). Mismatching
         // this produces X-mirrored light bands inside every Z-row, which the
         // user sees as very dark shadows under trees / on slopes.
         for byte_idx in 0..LIGHT_SECTION_BUFFER_BYTES {

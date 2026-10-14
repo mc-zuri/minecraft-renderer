@@ -139,13 +139,15 @@ pub fn parse_map_chunk_v18plus(
 
     let bytes_read = r.position();
 
+    // The light sections are vanilla DataLayer byte arrays: byte i holds blocks
+    // 2i (low nibble) and 2i + 1 (high nibble), so they are not long encoded.
     let sky_full = common::build_full_column_light(
         &sky_light,
         &sky_light_mask,
         &empty_sky_light_mask,
         num_sections,
         0, // sections the server omitted entirely stay 0 (matches prismarine-chunk loadParsedLight)
-        true,
+        false,
     )?;
     let block_full = common::build_full_column_light(
         &block_light,
@@ -153,7 +155,7 @@ pub fn parse_map_chunk_v18plus(
         &empty_block_light_mask,
         num_sections,
         0, // no skylight = no light
-        true,
+        false,
     )?;
 
     Ok(MapChunkResult {
@@ -217,6 +219,39 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    /// A 1.21 (protocol 767) map_chunk with one all-air section and one sky light
+    /// section whose first byte is `first_light_byte` and eighth byte `eighth_light_byte`.
+    fn one_section_map_chunk(first_light_byte: u8, eighth_light_byte: u8) -> Vec<u8> {
+        let mut p = vec![0x27]; // packet id
+        p.extend_from_slice(&0i32.to_be_bytes()); // x
+        p.extend_from_slice(&0i32.to_be_bytes()); // z
+        p.extend_from_slice(&[0x0a, 0x00]); // heightmaps: empty anonymous compound
+        let section = [0, 0, /* blocks */ 0, 0, 0, /* biomes */ 0, 0, 0];
+        p.push(section.len() as u8);
+        p.extend_from_slice(&section);
+        p.push(0); // block entities
+        p.push(1); // sky light mask: bit 1 = the first section
+        p.extend_from_slice(&2i64.to_be_bytes());
+        p.extend_from_slice(&[0, 0, 0]); // block light mask, empty sky and block light masks
+        p.extend_from_slice(&[1, 0x80, 0x10]); // one sky light array of 2048 bytes
+        let mut light = vec![0u8; 2048];
+        light[0] = first_light_byte;
+        light[7] = eighth_light_byte;
+        p.extend_from_slice(&light);
+        p.push(0); // block light arrays
+        p
+    }
+
+    #[test]
+    fn light_is_read_in_vanilla_nibble_order() {
+        let packet = one_section_map_chunk(0x21, 0x43);
+        let result = parse_map_chunk_v18plus(&packet, 1, 8, 3, McVersionFlags::for_protocol(767)).unwrap();
+        assert_eq!(result.bytes_read, packet.len());
+        // byte 0 holds x = 0 (low nibble) and x = 1, byte 7 holds x = 14 and x = 15
+        assert_eq!(&result.sky_light[0..2], &[1, 2]);
+        assert_eq!(&result.sky_light[14..16], &[3, 4]);
+    }
 
     fn fixtures_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../chunk-packet-fixtures/fixtures/map_chunk")
