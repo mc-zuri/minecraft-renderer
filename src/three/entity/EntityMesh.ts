@@ -16,6 +16,8 @@ import { createAnimatedObject } from './gltfAnimationUtils'
 import { BOAT_OBJ_OFFSET_Y } from './boatRenderSetup'
 import { VANILLA_117_HORSE_ENTITY_SCALES } from './horseEntityScale'
 import { createHorseHeadRig } from './horseHeadAnimation'
+import { buildExportedEntity, getEntityModelsStore, getExportedEntity, type ExportedEntityBuild } from './exportedEntityModels'
+import type { EntityLookInput } from 'mc-assets/dist/entityModels'
 
 interface ElemFace {
   dir: [number, number, number]
@@ -81,6 +83,8 @@ interface EntityOverrides {
   textures?: Record<string, string>
   rotation?: Record<string, { x?: number; y?: number; z?: number }>
   customModel?: EntityCustomModel
+  /** the entity's metadata and equipment, for the looks of models exported from the game */
+  lookInput?: EntityLookInput
 }
 
 function normalizeCustomModelParts(custom: EntityCustomModel): CustomModelPart[] {
@@ -466,7 +470,7 @@ interface EntityGeometry {
 export type EntityModelType = 'obj' | 'bedrock' | 'gltf'
 
 export type EntityDebugFlags = {
-  type?: 'obj' | 'bedrock' | 'gltf' | 'special'
+  type?: 'obj' | 'bedrock' | 'gltf' | 'special' | 'exported'
   tempMap?: string
   textureMap?: boolean
   errors?: string[]
@@ -475,6 +479,8 @@ export type EntityDebugFlags = {
 
 export class EntityMesh {
   mesh!: THREE.Object3D
+  /** set when the mesh is a model exported from the game (mc-assets' entityModels) */
+  exported?: ExportedEntityBuild
   animations?: THREE.AnimationClip[]
   private animationControllers: Array<ReturnType<typeof createAnimatedObject>> = []
 
@@ -599,14 +605,24 @@ export class EntityMesh {
       return
     }
 
+    // models exported from the game for this version, drawn for the entity's metadata and equipment
+    const exported = rendererSpecialHandled.includes(originalType) ? undefined : buildExportedEntity(version, originalType, overrides.lookInput)
+    if (exported) {
+      this.mesh = exported.object
+      this.exported = exported
+      debugFlags.type = 'exported'
+      delete debugFlags.tempMap
+      return
+    }
+
     if (externalModels[type]) {
       const objLoader = new OBJLoader()
       const texturePathMap = {
-        zombie_horse: `textures/${version}/entity/horse/horse_zombie.png`,
+        zombie_horse: 'textures/entity/horse/horse_zombie.png',
         husk: huskPng,
-        skeleton_horse: `textures/${version}/entity/horse/horse_skeleton.png`,
-        donkey: `textures/${version}/entity/horse/donkey.png`,
-        mule: `textures/${version}/entity/horse/mule.png`,
+        skeleton_horse: 'textures/entity/horse/horse_skeleton.png',
+        donkey: 'textures/entity/horse/donkey.png',
+        mule: 'textures/entity/horse/mule.png',
         ocelot: ocelotPng,
         arrow: arrowTexture,
         spectral_arrow: spectralArrowTexture,
@@ -702,7 +718,23 @@ export class EntityMesh {
     // This method is kept for compatibility but no longer needed
   }
 
-  static getStaticData(name: string): { boneNames: string[] } {
+  static getStaticData(name: string, version?: string): { boneNames: string[] } {
+    const look = version ? getExportedEntity(version, name)?.states[0]?.look : undefined
+    if (look) {
+      const boneNames = new Set<string>()
+      const collect = (part: { children?: Record<string, unknown> }) => {
+        for (const [childName, child] of Object.entries(part.children ?? {})) {
+          boneNames.add(childName)
+          collect(child as { children?: Record<string, unknown> })
+        }
+      }
+      for (const entry of Object.values(look)) {
+        if (entry.type !== 'model') continue
+        const layer = getEntityModelsStore().getModel(version!, entry.model)
+        if (layer) collect(layer.root)
+      }
+      return { boneNames: [...boneNames] }
+    }
     name = getEntityMapping(name) || name
     if (externalModels[name]) {
       return {

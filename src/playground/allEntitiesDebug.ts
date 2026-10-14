@@ -33,7 +33,7 @@ export const displayEntitiesDebugList = (mcData: IndexedData) => {
   const results: Array<{
     entity: string
     supported: boolean
-    type?: 'obj' | 'bedrock' | 'gltf' | 'special'
+    type?: EntityDebugFlags['type']
     mappedFrom?: string
     textureMap?: boolean
     errors?: string[]

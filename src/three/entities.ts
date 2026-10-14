@@ -58,6 +58,17 @@ import {
   type HorseHeadRig
 } from './entity/horseHeadAnimation'
 import { WalkingGeneralSwing } from './entity/animations'
+import {
+  EXPORTED_ENTITY_USER_DATA_KEY,
+  applyExportedEntityPose,
+  getExportedEntity,
+  lookInputFromEntity,
+  lookSignature,
+  prismarineToGameHeadAngles,
+  type ExportedEntityBuild,
+  type ExportedEntityRig
+} from './entity/exportedEntityModels'
+import { composeEntityLook } from 'mc-assets/dist/entityModels'
 import { disposeObject, loadNearestFilterTexture, loadTexture, loadThreeJsTextureFromUrl } from './threeJsUtils'
 import { armorModel, armorTextures, elytraTexture } from './entity/armorModels'
 import { WorldRendererThree } from './worldRendererThree'
@@ -348,9 +359,10 @@ function getEntityMesh(
     try {
       // https://github.com/PrismarineJS/prismarine-viewer/pull/410
       const entityName = (isFirstUpperCase(entity.name) ? snakeCase(entity.name) : entity.name).toLowerCase()
-      const e = new Entity.EntityMesh('1.16.4', entityName, world, overrides)
+      const e = new Entity.EntityMesh(world.version, entityName, world, { ...overrides, lookInput: lookInputFromEntity(entity) })
 
       if (e.mesh) {
+        if (e.exported) e.mesh.userData[EXPORTED_BUILD_USER_DATA_KEY] = e.exported
         addNametag(entity, options, e.mesh, world.version)
         return e.mesh
       }
@@ -377,6 +389,28 @@ function getEntityMesh(
     )
   }
   return cube
+}
+
+/** The exported model build of an entity mesh: its blocks and items are attached by Entities. */
+const EXPORTED_BUILD_USER_DATA_KEY = '_exportedEntityBuild'
+const EXPORTED_WALK_USER_DATA_KEY = '_exportedEntityWalk'
+
+/** Item-like entities exported as a single item (ThrownItemRenderer): the item and the renderer's scale. */
+function exportedItemEntity(version: string, name: string): { item: string; scale: number } | undefined {
+  const exported = getExportedEntity(version, name)
+  if (!exported?.item) return undefined
+  const look = composeEntityLook(exported)
+  if (look.length !== 1 || look[0].entry.type !== 'item') return undefined
+  const [m0, m1, m2] = look[0].entry.transform
+  return { item: exported.item.replace(/^minecraft:/, ''), scale: Math.hypot(m0, m1, m2) || 1 }
+}
+
+/** Items the renderer shows for item-like entities that older data draws with missing item textures. */
+const ITEM_ENTITY_ITEMS: Record<string, { item: string; scale: number }> = {
+  fireball: { item: 'fire_charge', scale: 3 },
+  small_fireball: { item: 'fire_charge', scale: 0.75 },
+  eye_of_ender: { item: 'ender_eye', scale: 1 },
+  firework_rocket: { item: 'firework_rocket', scale: 1 }
 }
 
 export type SceneEntity = THREE.Object3D & {
@@ -605,6 +639,14 @@ export class Entities {
 
       if (!isPlayerEntity && playerObject) {
         applyNetworkHeadPitch(playerObject, entity.userData)
+      }
+
+      const exportedRig = entity.children.find(child => child.name === 'mesh')?.userData[EXPORTED_ENTITY_USER_DATA_KEY] as ExportedEntityRig | undefined
+      const exportedWalk = entity.userData[EXPORTED_WALK_USER_DATA_KEY] as HorseHeadAnimationState | undefined
+      if (exportedRig && exportedWalk && exportedRig.name !== 'armor_stand') {
+        const walk = updateHorseHeadAnimationFrame(exportedWalk, dt)
+        const angles = prismarineToGameHeadAngles(entity.userData._exportedBodyYaw ?? 0, entity.userData._exportedHeadYaw ?? entity.userData._exportedBodyYaw ?? 0, entity.userData._exportedPitch ?? 0)
+        applyExportedEntityPose(exportedRig, { ...angles, limbSwing: walk.limbSwing, limbSwingAmount: walk.limbSwingAmount })
       }
 
       entity.traverse(child => {
@@ -1157,6 +1199,39 @@ export class Entities {
     }
   }
 
+  /** Blocks an exported model draws (minecart contents, mooshroom mushrooms, the snow golem's pumpkin). */
+  attachExportedExtras(mesh: THREE.Object3D) {
+    const build = mesh.userData[EXPORTED_BUILD_USER_DATA_KEY] as ExportedEntityBuild | undefined
+    if (!build) return
+    for (const block of build.blocks) {
+      const name = block.block?.replace(/^minecraft:/, '').replace(/\[.*$/, '')
+      if (!name) continue
+      let object: ReturnType<Entities['getItemMesh']>
+      try {
+        object = this.getItemMesh({ name }, {})
+      } catch {
+        continue
+      }
+      if (!object?.isBlock) {
+        object?.cleanup?.()
+        continue
+      }
+      // the game draws the block model over (0, 0, 0) to (1, 1, 1) of the submitted pose; the item group is centered
+      // and turned -90 degrees
+      const holder = new THREE.Group()
+      holder.name = `exported_block_${name}`
+      holder.matrixAutoUpdate = false
+      holder.matrix.fromArray(block.transform)
+      const inner = new THREE.Group()
+      inner.position.set(0.5, 0.5, 0.5)
+      inner.rotation.y = Math.PI / 2
+      inner.add(object.mesh)
+      holder.add(inner)
+      holder['additionalCleanup'] = () => object!.cleanup?.()
+      mesh.add(holder)
+    }
+  }
+
   setVisible(mesh: THREE.Object3D, visible: boolean) {
     //mesh.visible = visible
     //TODO: Fix workaround for visibility setting
@@ -1168,7 +1243,8 @@ export class Entities {
   }
 
   update(entity: SceneEntity['originalEntity'], overrides) {
-    const isPlayerModel = entity.name === 'player'
+    // mannequins (1.21.9+) are drawn with the player model and skin
+    const isPlayerModel = entity.name === 'player' || entity.name === 'mannequin'
     if (entity.name === 'zombie_villager' || entity.name === 'husk') {
       overrides.texture = `textures/1.16.4/entity/${entity.name === 'zombie_villager' ? 'zombie_villager/zombie_villager.png' : `zombie/${entity.name}.png`}`
     }
@@ -1208,7 +1284,16 @@ export class Entities {
 
       const group = new THREE.Group() as unknown as SceneEntity
       group.originalEntity = entity
-      if (
+      const itemEntity = exportedItemEntity(this.worldRenderer.version, entity.name) ?? ITEM_ENTITY_ITEMS[entity.name]
+      if (itemEntity) {
+        const object = this.getItemMesh({ name: itemEntity.item }, { 'minecraft:display_context': 'ground' }, true)
+        if (object) {
+          mesh = object.mesh
+          mesh.scale.multiplyScalar(0.5 * itemEntity.scale)
+          mesh.position.set(0, 0.1 * itemEntity.scale, 0)
+          group.additionalCleanup = () => object.cleanup?.()
+        }
+      } else if (
         entity.name === 'item' ||
         entity.name === 'tnt' ||
         entity.name === 'falling_block' ||
@@ -1282,6 +1367,8 @@ export class Entities {
       }
       if (!mesh) return
       mesh.name = 'mesh'
+      this.attachExportedExtras(mesh)
+      if (mesh.userData[EXPORTED_ENTITY_USER_DATA_KEY]) group.userData[EXPORTED_WALK_USER_DATA_KEY] = createHorseHeadAnimationState()
       const boatMeshYawOffset = getBoatMeshYawOffset(entity.name)
       if (boatMeshYawOffset != null) {
         mesh.rotation.y = boatMeshYawOffset
@@ -1324,6 +1411,21 @@ export class Entities {
       if (entity.renderHints) {
         e.originalEntity.renderHints = entity.renderHints
       }
+      const rig = mesh?.userData[EXPORTED_ENTITY_USER_DATA_KEY] as ExportedEntityRig | undefined
+      if (mesh && rig) {
+        const exported = getExportedEntity(this.worldRenderer.version, rig.name)
+        if (exported && lookSignature(composeEntityLook(exported, lookInputFromEntity(entity))) !== rig.signature) {
+          const rebuilt = getEntityMesh(this.mcData, entity, this.worldRenderer, this.entitiesOptions, { ...overrides, customModel: entity['customModel'] })
+          if (rebuilt) {
+            rebuilt.name = 'mesh'
+            this.attachExportedExtras(rebuilt)
+            e.remove(mesh)
+            disposeObject(mesh)
+            e.add(rebuilt)
+            mesh = rebuilt
+          }
+        }
+      }
     }
 
     this.applyEntityRenderHints(e, entity)
@@ -1344,7 +1446,7 @@ export class Entities {
     }
     // ---
     // set baby size
-    if (meta.baby) {
+    if (meta.baby && !mesh?.userData[EXPORTED_ENTITY_USER_DATA_KEY]) {
       e.scale.set(0.5, 0.5, 0.5)
     } else {
       e.scale.set(1, 1, 1)
@@ -1392,7 +1494,9 @@ export class Entities {
       } else {
         e.scale.set(1, 1, 1)
       }
-      e.traverse(c => {
+      if (mesh?.userData[EXPORTED_ENTITY_USER_DATA_KEY]) {
+        poseExportedArmorStand(mesh.userData[EXPORTED_ENTITY_USER_DATA_KEY] as ExportedEntityRig, armorStandMeta)
+      } else e.traverse(c => {
         switch (c.name) {
           case 'bone_baseplate':
             this.setVisible(c, hasBasePlate)
@@ -1569,6 +1673,15 @@ export class Entities {
       const headYaw = (entity as any).headYaw
       e.userData._horseHeadYaw = typeof headYaw === 'number' && Number.isFinite(headYaw) ? headYaw : entity.yaw
       e.userData._horseBodyYaw = typeof entity.yaw === 'number' && Number.isFinite(entity.yaw) ? entity.yaw : 0
+    }
+    if (e.userData[EXPORTED_WALK_USER_DATA_KEY]) {
+      e.userData._exportedPitch = typeof entity.pitch === 'number' && Number.isFinite(entity.pitch) ? entity.pitch : 0
+      e.userData._exportedBodyYaw = typeof entity.yaw === 'number' && Number.isFinite(entity.yaw) ? entity.yaw : 0
+      const headYaw = (entity as any).headYaw
+      e.userData._exportedHeadYaw = typeof headYaw === 'number' && Number.isFinite(headYaw) ? headYaw : e.userData._exportedBodyYaw
+      if (!headRotationOnly && entity.position && Number.isFinite(entity.position.x) && Number.isFinite(entity.position.z)) {
+        setHorseHeadAnimationPosition(e.userData[EXPORTED_WALK_USER_DATA_KEY], entity.position)
+      }
     }
     const cameraSynced = usesCameraSyncedVehiclePosition(entity)
     if (entity.position) {
@@ -1778,6 +1891,21 @@ export class Entities {
     })
     if (itemObject?.mesh) {
       entityMesh.traverse(c => {
+        if (c instanceof THREE.Bone && c.name === `${hand}_arm` && !c.children.some(child => child.name === itemName)) {
+          const group = new THREE.Object3D()
+          group['additionalCleanup'] = () => itemObject.cleanup?.()
+          group.rotation.set(-Math.PI / 2, Math.PI, 0, 'XYZ')
+          group.translateX(hand === 'left' ? -1 : 1)
+          group.translateY(2)
+          group.translateZ(-10)
+          const holder = new THREE.Object3D()
+          holder.rotation.x = Math.PI
+          holder.add(itemObject.mesh)
+          group.add(holder)
+          group.name = itemName
+          c.add(group)
+          return
+        }
         if (c.name.toLowerCase() === bedrockParentName || c.name === `${hand}Arm`) {
           const group = new THREE.Object3D()
           group['additionalCleanup'] = () => {
@@ -1877,8 +2005,10 @@ export class Entities {
     if (!entityMesh || !entity.equipment) return
 
     const isPlayer = entity.type === 'player'
-    this.addItemModel(entityMesh, isPlayer ? 'right' : 'left', entity.equipment[0], isPlayer)
-    this.addItemModel(entityMesh, isPlayer ? 'left' : 'right', entity.equipment[1], isPlayer)
+    const exported = !!entityMesh.children.find(child => child.name === 'mesh')?.userData[EXPORTED_ENTITY_USER_DATA_KEY]
+    const mainHand = isPlayer || exported ? 'right' : 'left'
+    this.addItemModel(entityMesh, mainHand, entity.equipment[0], isPlayer)
+    this.addItemModel(entityMesh, mainHand === 'right' ? 'left' : 'right', entity.equipment[1], isPlayer)
     addArmorModel(this.worldRenderer, entityMesh, 'feet', entity.equipment[2])
     addArmorModel(this.worldRenderer, entityMesh, 'legs', entity.equipment[3], 2)
     addArmorModel(this.worldRenderer, entityMesh, 'chest', entity.equipment[4])
@@ -1894,6 +2024,29 @@ export class Entities {
       if (playerObject.cape.map === null) {
         playerObject.cape.visible = false
       }
+    }
+  }
+}
+
+/**
+ * ArmorStandArmorModel.setupAnim: each part's rotation is its pose in degrees; the parts' rest pose from the export has
+ * the default poses, metadata replaces them.
+ */
+function poseExportedArmorStand(rig: ExportedEntityRig, meta: Record<string, any>) {
+  const poses: Record<string, unknown> = {
+    head: meta.head_pose,
+    body: meta.body_pose,
+    left_arm: meta.left_arm_pose,
+    right_arm: meta.right_arm_pose,
+    left_leg: meta.left_leg_pose,
+    right_leg: meta.right_leg_pose
+  }
+  for (const [part, pose] of Object.entries(poses)) {
+    if (!pose || typeof pose !== 'object') continue
+    const { pitch = 0, yaw = 0, roll = 0 } = pose as { pitch?: number; yaw?: number; roll?: number }
+    for (const exported of rig.parts.get(part) ?? []) {
+      exported.bone.rotation.set(THREE.MathUtils.degToRad(pitch), THREE.MathUtils.degToRad(yaw), THREE.MathUtils.degToRad(roll), 'ZYX')
+      exported.rest.rotation.copy(exported.bone.rotation)
     }
   }
 }
