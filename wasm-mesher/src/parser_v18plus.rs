@@ -90,6 +90,9 @@ pub struct MapChunkResult {
     pub bytes_read: usize,
 }
 
+/// `max_bits_per_block` and `max_bits_per_biome` are the global palette bits,
+/// ceillog2 of the block state and biome registry sizes; direct containers are
+/// stored with them.
 pub fn parse_map_chunk_v18plus(
     packet: &[u8],
     num_sections: usize,
@@ -202,8 +205,8 @@ fn parse_chunk_sections(
     flags: McVersionFlags,
 ) -> io::Result<(Vec<u16>, Vec<u8>)> {
     let mut r = common::PacketReader::new(chunk_data);
-    let block_capacity = flags.unprefixed_containers.then_some(common::BLOCK_SECTION_VOLUME);
-    let biome_capacity = flags.unprefixed_containers.then_some(common::BIOME_SECTION_VOLUME);
+    let block_layout = common::WireContainer::blocks(max_bits_per_block, flags.unprefixed_containers);
+    let biome_layout = common::WireContainer::biomes(max_bits_per_biome, flags.unprefixed_containers);
     let total = num_sections * common::BLOCK_SECTION_VOLUME;
     let mut block_states = vec![0u16; total];
     let mut biomes = vec![0u8; total];
@@ -213,7 +216,7 @@ fn parse_chunk_sections(
         if flags.has_fluid_count {
             let _fluid_count = r.read_i16_be()?;
         }
-        let blocks = common::parse_container_sized(&mut r, common::MAX_BITS_PER_BLOCK, max_bits_per_block, block_capacity)?;
+        let blocks = common::parse_wire_container(&mut r, block_layout)?;
         let base_y_blocks = s * 16 * 256;
         for y_in in 0..16usize {
             let row_y = base_y_blocks + y_in * 256;
@@ -227,7 +230,7 @@ fn parse_chunk_sections(
             }
         }
 
-        let bio = common::parse_container_sized(&mut r, common::MAX_BITS_PER_BIOME, max_bits_per_biome, biome_capacity)?;
+        let bio = common::parse_wire_container(&mut r, biome_layout)?;
         for y_in in 0..16usize {
             let y4 = y_in >> 2;
             let row_y = base_y_blocks + y_in * 256;
