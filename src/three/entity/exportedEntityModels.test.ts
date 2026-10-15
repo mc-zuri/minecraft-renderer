@@ -11,6 +11,8 @@ import {
   cubePolygons,
   entityTextureUrl,
   entityTextureUrls,
+  entityModelName,
+  resolveExportedEntityName,
   getEntityModelsStore,
   getExportedEntity,
   isEntityModelsVersionCovered,
@@ -22,6 +24,8 @@ import { isBoatEntityName } from './boatModelRotation'
 import reference26 from './fixtures/entityReferenceQuads-26.3.json'
 import reference1214 from './fixtures/entityReferenceQuads-1.21.4.json'
 import reference1204 from './fixtures/entityReferenceQuads-1.20.4.json'
+import reference1144 from './fixtures/entityReferenceQuads-1.14.4.json'
+import reference189 from './fixtures/entityReferenceQuads-1.8.9.json'
 
 // textures are fetched in the browser; the meshes are checked without them
 vi.mock('../threeJsUtils', () => ({ loadThreeJsTextureFromUrlSync: () => ({ promise: new Promise(() => {}) }) }))
@@ -60,15 +64,36 @@ const NOT_DRAWN: Record<string, string> = {
   item_display: 'display entity, drawn by its item'
 }
 
+/** Abstract entries of minecraft-data's 1.8 to 1.10 lists, no entity of the game. */
+const NOT_ENTITIES = new Set(['mob', 'monster'])
+
+/**
+ * GL-era versions (1.8 to 1.14): what their renderers draw with the tessellator or as blocks, drawn by the older models
+ * or as items and blocks, under the names those versions have.
+ */
+const DRAWN_ELSEWHERE_BEFORE_1_15: Record<string, string> = {
+  fishing_float: 'bedrock model',
+  fishing_hook: 'bedrock model',
+  xp_orb: 'bedrock model',
+  fireball: 'drawn as an item (ITEM_ENTITY_ITEMS)',
+  small_fireball: 'drawn as an item (ITEM_ENTITY_ITEMS)',
+  primed_tnt: 'block mesh',
+  falling_sand: 'block mesh',
+  tipped_arrow: 'custom geometry, OBJ model',
+  evocation_fangs: 'bedrock model'
+}
+
 /** Older versions: what their renderers draw as custom geometry, drawn by the older models. */
 const DRAWN_ELSEWHERE_BEFORE_1_21_2: Record<string, string> = {
   arrow: 'custom geometry, OBJ model',
   spectral_arrow: 'custom geometry, OBJ model'
 }
 
+/** minecraft-data's entity names as entities.ts looks them up (PigZombie: pig_zombie). */
 const allEntities = (version = VERSION): string[] => {
   const mcData = require('minecraft-data')(version)
-  return mcData.entitiesArray.map((e: { name: string }) => e.name)
+  const names = mcData.entitiesArray.map((e: { name: string }) => resolveExportedEntityName(version, entityModelName(e.name)))
+  return [...new Set<string>(names)].filter(name => !NOT_ENTITIES.has(name))
 }
 
 /** Exported versions minecraft-data has entities of (it reads 1.21.2 as 1.21). */
@@ -79,12 +104,21 @@ const versionNumber = (version: string) => {
   return +`${x.padStart(2, '0')}${y.padStart(2, '0')}${z.padStart(2, '0')}`
 }
 
-const textureFile = (texture: string) => path.join(mcAssetsDist, 'other-textures/latest', entityTextureUrl(texture).replace(/^textures\//, ''))
+/** The file the version reads first: its own older copy when mc-assets keeps one, else the latest. */
+const textureFile = (texture: string, version: string) => {
+  const url = entityTextureUrls(texture, version)[0]
+  const versioned = url.match(/^textures\/(\d[\d.]*)\/(.*)$/)
+  return versioned ? path.join(mcAssetsDist, 'other-textures', versioned[1], versioned[2]) : path.join(mcAssetsDist, 'other-textures/latest', url.replace(/^textures\//, ''))
+}
 
 describe('exported entity models', () => {
   test.each(dataVersions())('%s: every entity draws an exported model, an item, or is drawn elsewhere or not at all, on purpose', version => {
     const uncovered: string[] = []
-    const elsewhere = { ...DRAWN_ELSEWHERE, ...(versionNumber(version) < versionNumber('1.21.2') ? DRAWN_ELSEWHERE_BEFORE_1_21_2 : {}) }
+    const elsewhere = {
+      ...DRAWN_ELSEWHERE,
+      ...(versionNumber(version) < versionNumber('1.21.2') ? DRAWN_ELSEWHERE_BEFORE_1_21_2 : {}),
+      ...(versionNumber(version) < versionNumber('1.15') ? DRAWN_ELSEWHERE_BEFORE_1_15 : {})
+    }
     for (const name of allEntities(version)) {
       // boats keep the OBJ model their paddle, water patch and passenger rigs are made for
       if (elsewhere[name] || NOT_DRAWN[name] || isBoatEntityName(name)) continue
@@ -113,7 +147,7 @@ describe('exported entity models', () => {
       for (const state of exported?.states ?? []) {
         for (const entry of Object.values(state.look ?? state.patch ?? {})) {
           const texture = entry?.texture as string | undefined
-          if (texture && !texture.includes(':atlas/') && !fs.existsSync(textureFile(texture))) missing.add(`${name}: ${texture}`)
+          if (texture && !texture.includes(':atlas/') && !fs.existsSync(textureFile(texture, version))) missing.add(`${name}: ${texture}`)
         }
       }
     }
@@ -137,6 +171,24 @@ describe('exported entity models', () => {
     expect(getEntityModelsStore().versions[0]).toBeTruthy()
     expect(isEntityModelsVersionCovered('1.8.8')).toBe(getEntityModelsStore().versions[0].startsWith('1.8'))
     expect(isEntityModelsVersionCovered('1.17')).toBe(true)
+  })
+
+  test('GL-era worlds read their own export, not 1.15.2', () => {
+    const own = (version: string, name: string) => JSON.stringify(getExportedEntity(version, name))
+    // mineflayer's 1.8.8 reads the 1.8.9 export, under 1.8 names
+    expect(isEntityModelsVersionCovered('1.8.8')).toBe(true)
+    expect(entityModelName('PigZombie')).toBe('pig_zombie')
+    for (const name of ['pig_zombie', 'entity_horse', 'villager_golem', 'ozelot', 'snow_man', 'lava_slime', 'mushroom_cow']) {
+      expect(buildExportedEntity('1.8.8', name), name).toBeTruthy()
+    }
+    for (const version of ['1.8.8', '1.9.4', '1.10.2', '1.11.2', '1.12.2', '1.13.2', '1.14.4']) {
+      expect(own(version, 'zombie'), version).not.toBe(own('1.15.2', 'zombie'))
+    }
+    expect(buildExportedEntity('1.13.2', 'drowned')).toBeTruthy()
+    expect(buildExportedEntity('1.12.2', 'parrot')).toBeTruthy()
+    // a 1.8 zombie's texture is the 1.8 one mc-assets keeps
+    const texture = (composeEntityLook(getExportedEntity('1.8.8', 'zombie')!)[0].entry as EntityModelEntry).texture!
+    expect(entityTextureUrls(texture, '1.8.8')[0]).toMatch(/^textures\/1\.\d+\/entity\/zombie\/zombie\.png$/)
   })
 })
 
@@ -173,7 +225,7 @@ function drawnQuads(version: string, entry: EntityModelEntry) {
 
 // the game's quads for a few entities, written by the exporter: 26.3 (submit node collectors), 1.21.4 (render states,
 // buffers) and 1.20.4 (entities drawn part by part)
-describe.each([reference26, reference1214, reference1204] as Array<Record<string, Record<string, number[][][]> | string>>)('built meshes draw what $version draws', reference => {
+describe.each([reference26, reference1214, reference1204, reference1144, reference189] as Array<Record<string, Record<string, number[][][]> | string>>)('built meshes draw what $version draws', reference => {
   const version = reference.version as string
   for (const [name, entries] of Object.entries(reference)) {
     if (typeof entries === 'string') continue

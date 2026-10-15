@@ -7,7 +7,6 @@ import { inferModelType, loadCapeToCanvas, loadEarsToCanvasFromSkin } from 'skin
 // todo replace with url
 import { flat, fromFormattedString } from '@xmcl/text-component'
 import mojangson from 'mojangson'
-import { snakeCase } from 'change-case'
 import { Item } from 'prismarine-item'
 import { isEntityAttackable } from 'mineflayer-mouse/dist/attackableEntity'
 import { Team } from 'mineflayer'
@@ -66,7 +65,8 @@ import {
   lookSignature,
   prismarineToGameHeadAngles,
   type ExportedEntityBuild,
-  type ExportedEntityRig
+  type ExportedEntityRig,
+  entityModelName
 } from './entity/exportedEntityModels'
 import { composeEntityLook } from 'mc-assets/dist/entityModels'
 import { disposeObject, loadNearestFilterTexture, loadTexture, loadThreeJsTextureFromUrl } from './threeJsUtils'
@@ -330,7 +330,6 @@ function applyPlayerNametagTransform(nametag: THREE.Object3D | undefined, player
 // todo cleanup
 const nametags = {}
 
-const isFirstUpperCase = str => str.charAt(0) === str.charAt(0).toUpperCase()
 
 function metadataAsArray(metadata: unknown): unknown[] | undefined {
   if (metadata == null) return undefined
@@ -358,7 +357,7 @@ function getEntityMesh(
   if (entity.name) {
     try {
       // https://github.com/PrismarineJS/prismarine-viewer/pull/410
-      const entityName = (isFirstUpperCase(entity.name) ? snakeCase(entity.name) : entity.name).toLowerCase()
+      const entityName = entityModelName(entity.name)
       const e = new Entity.EntityMesh(world.version, entityName, world, { ...overrides, lookInput: lookInputFromEntity(entity) })
 
       if (e.mesh) {

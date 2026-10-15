@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { snakeCase } from 'change-case'
 import entityModelsJson from 'mc-assets/dist/entityModels.json'
 import {
   composeEntityLook,
@@ -49,9 +50,40 @@ export const isEntityModelsVersionCovered = (version: string) => {
   return versionToNumber(version) >= versionToNumber(minor === undefined ? major : `${major}.${minor}`)
 }
 
+/**
+ * Names minecraft-data gives objects (spawned with the spawn object packet before 1.14) that are not the names the game
+ * registers them by: the exported names to try, in order.
+ */
+const OBJECT_NAMES: Record<string, string[]> = {
+  item_stack: ['item'],
+  'area_effect cloud': ['area_effect_cloud'],
+  activated_tnt: ['tnt', 'primed_tnt'],
+  endercrystal: ['end_crystal', 'ender_crystal'],
+  tipped_arrow: ['arrow'],
+  firecharge: ['small_fireball'],
+  thrown_enderpearl: ['ender_pearl'],
+  falling_objects: ['falling_block'],
+  item_frames: ['item_frame'],
+  'eye_of ender': ['eye_of_ender', 'eye_of_ender_signal'],
+  thrown_potion: ['potion'],
+  'thrown_exp bottle': ['experience_bottle', 'xp_bottle'],
+  armorstand: ['armor_stand'],
+  fishing_hook: ['fishing_bobber'],
+  fireworks_rocket: ['firework_rocket'],
+  commandblock_minecart: ['command_block_minecart'],
+  'iron_golem}': ['iron_golem']
+}
+
+/** The name the version's export has the entity under: its own, or the registered name of an object minecraft-data names otherwise. */
+export const resolveExportedEntityName = (version: string, name: string) => {
+  const store = getEntityModelsStore()
+  if (store.getEntity(version, name)) return name
+  return OBJECT_NAMES[name]?.find(candidate => store.getEntity(version, candidate)) ?? name
+}
+
 export const getExportedEntity = (version: string, name: string): EntityDefinition | undefined => {
   if (!isEntityModelsVersionCovered(version)) return undefined
-  return getEntityModelsStore().getEntity(version, name)
+  return getEntityModelsStore().getEntity(version, resolveExportedEntityName(version, name))
 }
 
 /** The metadata and equipment of a prismarine entity, as the look conditions read them. */
@@ -67,6 +99,12 @@ export const lookInputFromEntity = (entity: { metadata?: unknown; equipment?: Ar
 /** Identifies a look: rebuild the mesh when it changes. */
 export const lookSignature = (look: Array<{ key: string; entry: EntityLookEntry }>) =>
   JSON.stringify(look.map(({ key, entry }) => [key, (entry as EntityModelEntry).texture, (entry as EntityModelEntry).tint, (entry as EntityBlockEntry).block]))
+
+/**
+ * The name entities are looked up by: minecraft-data's name, in snake case where it is not (1.8 to 1.10 name entities
+ * like PigZombie: pig_zombie). The exports of those versions keep the names the game registered.
+ */
+export const entityModelName = (name: string) => (name.charAt(0) === name.charAt(0).toUpperCase() ? snakeCase(name) : name).toLowerCase()
 
 /** minecraft:entity/zombie/zombie -> textures/entity/zombie/zombie.png */
 export const entityTextureUrl = (texture: string) => `textures/${texture.replace(/^minecraft:/, '')}.png`
