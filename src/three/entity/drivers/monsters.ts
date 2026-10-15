@@ -610,6 +610,8 @@ export const MONSTERS_DRIVERS: Record<string, EntityDriver> = {
   cave_spider: livingOnly,
   slime: cubeMob(0.6),
   magma_cube: cubeMob(0.9),
+  // 1.8's name for the magma cube (LavaSlime)
+  lava_slime: cubeMob(0.9),
   sulfur_cube: sulfurCube,
   blaze,
   ghast,

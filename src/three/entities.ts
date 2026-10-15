@@ -93,6 +93,7 @@ import { armorModel, armorTextures, elytraTexture } from './entity/armorModels'
 import { ExportedEntityAnimator, applyAnimationOffsets, poseName } from './entity/exportedAnimations'
 import { EntityAnimTracker, entityAnimState, entityEraState, type EntityAnimInput } from './entity/entityAnimState'
 import { BLOCK_ENTITIES, fallingBlockState, thrownItemOf } from './entity/thrownItems'
+import { CUBE_MOBS, cubeMobScale, cubeMobSize, cubeMobSquish } from './entity/cubeMobs'
 import './entity/drivers'
 import { animContext } from './entity/setupAnim'
 import { WorldRendererThree } from './worldRendererThree'
@@ -756,6 +757,11 @@ export class Entities {
         const exportVersion = entityExportVersionFor(this.worldRenderer.version, exportedRig.name) ?? this.worldRenderer.version
         const modelState = versionToNumber(exportVersion) < versionToNumber('1.21.2') ? entityEraState(animTracker, animInput, exportedDataNames(this.worldRenderer.version, exportedRig.name), animState) : animState
         applyExportedSetupAnim(exportedRig, modelState)
+        // slimes and magma cubes: the renderer's scale by size and squish, about the feet
+        if (CUBE_MOBS.has(exportedRig.name)) {
+          const scale = cubeMobScale(cubeMobSize(animInput, exportedDataNames(this.worldRenderer.version, exportedRig.name)), cubeMobSquish(animTracker, exportVersion))
+          entity.children.find(child => child.name === 'mesh')?.scale.set(...scale)
+        }
         if (isBoatEntityName(animInput.name)) applyBoatRock(exportedRig, animState, animContext(this.worldRenderer.version).sin)
       } else if (exportedRig && exportedWalk && exportedRig.name !== 'armor_stand') {
         const walk = updateHorseHeadAnimationFrame(exportedWalk, dt)
