@@ -3,6 +3,7 @@ import entityModelsJson from 'mc-assets/dist/entityModels.json'
 import {
   composeEntityLook,
   ENTITY_EQUIPMENT_SLOTS,
+  entityTextureFolder,
   EntityModelsStore,
   type EntityBlockEntry,
   type EntityCustomEntry,
@@ -16,7 +17,8 @@ import {
   type EntityModelPart,
   type EntityModelsData
 } from 'mc-assets/dist/entityModels'
-import { loadTexture } from '../threeJsUtils'
+import { createCanvas } from '../../lib/utils'
+import { loadThreeJsTextureFromUrlSync } from '../threeJsUtils'
 
 /**
  * Entity models exported from the game (mc-assets' dist/entityModels.json, made by minecraft-model-generator): the
@@ -68,6 +70,64 @@ export const lookSignature = (look: Array<{ key: string; entry: EntityLookEntry 
 
 /** minecraft:entity/zombie/zombie -> textures/entity/zombie/zombie.png */
 export const entityTextureUrl = (texture: string) => `textures/${texture.replace(/^minecraft:/, '')}.png`
+
+/**
+ * Where a version's texture is served: an older copy under textures/<version>/ (mc-assets' other-textures/<version>,
+ * when the texture changed since), then the latest one under textures/.
+ */
+export const entityTextureUrls = (texture: string, version?: string) => {
+  const latest = entityTextureUrl(texture)
+  const folder = version ? entityTextureFolder(entityModelsJson as unknown as EntityModelsData, texture, version) : 'latest'
+  return folder === 'latest' ? [latest] : [`textures/${folder}/${texture.replace(/^minecraft:/, '')}.png`, latest]
+}
+
+const entityTextures = new Map<string, Promise<THREE.Texture>>()
+
+/** The first of the urls that loads. */
+const loadFirst = async (urls: string[]) => {
+  let error: unknown
+  for (const url of urls) {
+    try {
+      return await loadThreeJsTextureFromUrlSync(url).promise
+    } catch (err) {
+      error = err
+    }
+  }
+  throw error
+}
+
+/**
+ * An entity texture for the version, cached; several layers (a 1.15 horse's coat, markings and armor) are drawn into
+ * one, like the game's LayeredTexture.
+ */
+export const loadEntityTexture = (texture: string, layers: string[] | undefined, version?: string): Promise<THREE.Texture> => {
+  const all = layers?.length ? layers : [texture]
+  const key = `${version ?? ''}|${all.join('|')}`
+  let loaded = entityTextures.get(key)
+  if (!loaded) {
+    loaded = (async () => {
+      const textures = await Promise.all(all.map(async layer => loadFirst(entityTextureUrls(layer, version))))
+      let result = textures[0]
+      if (textures.length > 1) {
+        const base = textures[0].image as { width: number; height: number }
+        const canvas = createCanvas(base.width, base.height)
+        const context = canvas.getContext('2d')!
+        for (const layer of textures) context.drawImage(layer.image as CanvasImageSource, 0, 0, base.width, base.height)
+        result = new THREE.Texture(canvas as unknown as HTMLCanvasElement)
+      }
+      result.magFilter = THREE.NearestFilter
+      result.minFilter = THREE.NearestFilter
+      result.flipY = false
+      result.wrapS = THREE.RepeatWrapping
+      result.wrapT = THREE.RepeatWrapping
+      result.needsUpdate = true
+      return result
+    })()
+    entityTextures.set(key, loaded)
+    loaded.catch(err => console.error('[entity texture] failed to load', texture, err))
+  }
+  return loaded
+}
 
 // ---- cubes ---------------------------------------------------------------------------------------------------------
 
@@ -204,7 +264,7 @@ export function materialForEntry(entry: Pick<EntityModelEntry, 'renderType' | 't
 }
 
 /** One model entry as a SkinnedMesh under a group carrying the entry's transform. */
-export function buildModelEntry(entry: EntityModelEntry, layer: EntityModelLayer, parts: Map<string, ExportedPart[]>): THREE.Group {
+export function buildModelEntry(entry: EntityModelEntry, layer: EntityModelLayer, parts: Map<string, ExportedPart[]>, version?: string): THREE.Group {
   const holder = new THREE.Group()
   holder.name = `exported_${entry.model}${entry.part ?? ''}`
   holder.matrixAutoUpdate = false
@@ -298,36 +358,14 @@ export function buildModelEntry(entry: EntityModelEntry, layer: EntityModelLayer
   }
 
   if (entry.texture) {
-    const [textureWidth, textureHeight] = layer.textureSize
-    void loadTexture(
-      entityTextureUrl(entry.texture),
-      texture => {
-        texture.magFilter = THREE.NearestFilter
-        texture.minFilter = THREE.NearestFilter
-        texture.flipY = false
-        texture.wrapS = THREE.RepeatWrapping
-        texture.wrapT = THREE.RepeatWrapping
+    // uvs are 0 to 1 over the whole texture, as the game draws them: the version's own texture (or a resource pack's of
+    // any resolution) fits
+    void loadEntityTexture(entry.texture, (entry as { textureLayers?: string[] }).textureLayers, version)
+      .then(texture => {
         ;(material as THREE.MeshLambertMaterial).map = texture
         material.needsUpdate = true
-      },
-      () => {
-        // a texture of another size than the model's (an older model with a newer, taller texture): keep pixel uvs
-        const map = (material as THREE.MeshLambertMaterial).map as THREE.Texture<HTMLImageElement | ImageBitmap> | null
-        const image = map?.image
-        if (!map || !image?.width || !textureWidth || !textureHeight) return
-        if (image.width !== textureWidth || image.height !== textureHeight) {
-          const repeat = new THREE.Vector2(textureWidth / image.width, textureHeight / image.height)
-          if (repeat.x !== map.repeat.x || repeat.y !== map.repeat.y) {
-            // shared textures are cached by url: give this material its own copy
-            const own = map.clone()
-            own.repeat.copy(repeat)
-            own.needsUpdate = true
-            ;(material as THREE.MeshLambertMaterial).map = own
-          }
-        }
-        material.needsUpdate = true
-      }
-    )
+      })
+      .catch(() => {})
   }
   holder.add(mesh)
   return holder
@@ -360,7 +398,7 @@ export function buildExportedEntity(version: string, name: string, input: Entity
       if (entry.renderType === 'water_mask') continue // the boat's water patch: the renderer masks water itself
       const layer = store.getModel(version, entry.model)
       if (!layer) continue
-      object.add(buildModelEntry(entry, layer, rig.parts))
+      object.add(buildModelEntry(entry, layer, rig.parts, version))
     } else if (entry.type === 'block') {
       result.blocks.push(entry)
     } else if (entry.type === 'item') {

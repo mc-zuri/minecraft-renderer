@@ -10,6 +10,7 @@ import {
   buildModelEntry,
   cubePolygons,
   entityTextureUrl,
+  entityTextureUrls,
   getEntityModelsStore,
   getExportedEntity,
   isEntityModelsVersionCovered,
@@ -22,7 +23,7 @@ import reference1214 from './fixtures/entityReferenceQuads-1.21.4.json'
 import reference1204 from './fixtures/entityReferenceQuads-1.20.4.json'
 
 // textures are fetched in the browser; the meshes are checked without them
-vi.mock('../threeJsUtils', () => ({ loadTexture: async () => {} }))
+vi.mock('../threeJsUtils', () => ({ loadThreeJsTextureFromUrlSync: () => ({ promise: new Promise(() => {}) }) }))
 
 const require = createRequire(import.meta.url)
 const mcAssetsDist = path.dirname(require.resolve('mc-assets/dist/entityModels.json'))
@@ -252,5 +253,15 @@ describe('looks from entity state', () => {
     const names: string[] = []
     build.object.traverse(child => names.push(child.name))
     expect(names).toContain('geometry_minecraft:pig#saddle')
+  })
+})
+
+describe('textures by version', () => {
+  test('a version loads the copy of a texture it had, then the latest one', () => {
+    expect(entityTextureUrls('minecraft:entity/iron_golem/iron_golem', '1.15.2')).toEqual([
+      'textures/1.19/entity/iron_golem/iron_golem.png',
+      'textures/entity/iron_golem/iron_golem.png'
+    ])
+    expect(entityTextureUrls('minecraft:entity/iron_golem/iron_golem', '26.3')).toEqual(['textures/entity/iron_golem/iron_golem.png'])
   })
 })
