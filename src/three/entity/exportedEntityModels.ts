@@ -948,6 +948,17 @@ const QUADRUPED_LIMBS: Array<[string, number, number]> = [
   ['left_front_leg', 0, 1.4]
 ]
 
+/** Every part back in the pose the renderer leaves it in (before keyframe animations add to it). */
+export function resetExportedPose(rig: ExportedEntityRig) {
+  for (const parts of rig.parts.values()) {
+    for (const part of parts) {
+      part.bone.position.copy(part.rest.position)
+      part.bone.rotation.copy(part.rest.rotation)
+      part.bone.scale.copy(part.rest.scale)
+    }
+  }
+}
+
 /**
  * Head look and walking on top of the rest pose: the head (or an equine's head_parts) turns by the head's yaw and
  * pitch, legs and arms swing like HumanoidModel and QuadrupedModel swing them.

@@ -71,6 +71,7 @@ import {
   setSkinUrlResolver,
   updateExportedHeadAnchor,
   headItemDisplayTransform,
+  resetExportedPose,
   PAINTING_SIGNATURE_USER_DATA_KEY,
   paintingInputFromEntity,
   paintingSignature,
@@ -85,6 +86,7 @@ import {
 import { composeEntityLook } from 'mc-assets/dist/entityModels'
 import { disposeObject, loadNearestFilterTexture, loadTexture, loadThreeJsTextureFromUrl } from './threeJsUtils'
 import { armorModel, armorTextures, elytraTexture } from './entity/armorModels'
+import { ExportedEntityAnimator, applyAnimationOffsets, poseName } from './entity/exportedAnimations'
 import { WorldRendererThree } from './worldRendererThree'
 import { IndexedData } from 'minecraft-data'
 import { ItemSpecificContextProperties } from '../playerState/types'
@@ -431,6 +433,8 @@ const LAST_OVERRIDES_USER_DATA_KEY = '_lastEntityOverrides'
 /** The exported model build of an entity mesh: its blocks and items are attached by Entities. */
 const EXPORTED_BUILD_USER_DATA_KEY = '_exportedEntityBuild'
 const EXPORTED_WALK_USER_DATA_KEY = '_exportedEntityWalk'
+/** The keyframe animations an exported entity plays (warden, frog, camel, sniffer...). */
+const EXPORTED_ANIMATOR_USER_DATA_KEY = '_exportedEntityAnimator'
 
 /** Item-like entities exported as a single item (ThrownItemRenderer): the item and the renderer's scale. */
 function exportedItemEntity(version: string, name: string): { item: string; scale: number } | undefined {
@@ -695,7 +699,11 @@ export class Entities {
       if (exportedRig && exportedWalk && exportedRig.name !== 'armor_stand') {
         const walk = updateHorseHeadAnimationFrame(exportedWalk, dt)
         const angles = prismarineToGameHeadAngles(entity.userData._exportedBodyYaw ?? 0, entity.userData._exportedHeadYaw ?? entity.userData._exportedBodyYaw ?? 0, entity.userData._exportedPitch ?? 0)
-        applyExportedEntityPose(exportedRig, { ...angles, limbSwing: walk.limbSwing, limbSwingAmount: walk.limbSwingAmount })
+        const animator = entity.userData[EXPORTED_ANIMATOR_USER_DATA_KEY] as ExportedEntityAnimator | undefined
+        if (animator) resetExportedPose(exportedRig)
+        // a model with a keyframe walk walks with it, not the generic limb swing
+        applyExportedEntityPose(exportedRig, { ...angles, limbSwing: walk.limbSwing, limbSwingAmount: animator?.walks ? 0 : walk.limbSwingAmount })
+        if (animator) applyAnimationOffsets(exportedRig, animator.sample(performance.now(), walk.limbSwing, walk.limbSwingAmount), animator.visibility())
       }
       if (exportedRig) updateExportedHeadAnchor(exportedRig)
 
@@ -1249,6 +1257,36 @@ export class Entities {
     }
   }
 
+  /**
+   * The keyframe animations of an exported entity: made when its rig is (again when it is rebuilt from another export),
+   * told the entity's pose and synched data on every update.
+   */
+  private updateExportedAnimator(e: SceneEntity, mesh: THREE.Object3D | undefined, entity: SceneEntity['originalEntity']) {
+    const rig = mesh?.userData[EXPORTED_ENTITY_USER_DATA_KEY] as ExportedEntityRig | undefined
+    if (!rig) {
+      e.userData[EXPORTED_ANIMATOR_USER_DATA_KEY] = undefined
+      return
+    }
+    let animator = e.userData[EXPORTED_ANIMATOR_USER_DATA_KEY] as (ExportedEntityAnimator & { rig?: ExportedEntityRig }) | undefined
+    if (animator?.rig !== rig && (!animator || e.userData._exportedAnimatorName !== rig.name)) {
+      const store = getEntityModelsStoreFor(this.worldRenderer.version, rig.name)
+      animator = store ? ExportedEntityAnimator.create(rig.name, store, this.worldRenderer.version) : undefined
+      e.userData[EXPORTED_ANIMATOR_USER_DATA_KEY] = animator
+      e.userData._exportedAnimatorName = rig.name
+    }
+    if (animator) animator.rig = rig
+    if (!animator) return
+    const meta = getGeneralEntitiesMetadata(entity, this.mcData) as Record<string, unknown>
+    animator.update(poseName(meta.pose, this.worldRenderer.version), key => meta[key])
+  }
+
+  /** An entity event (entity_status): exported entities start the animations it starts (a warden's attack, a creaking's). */
+  handleEntityEvent(entityId: number | string, status: number) {
+    const e = this.entities[entityId]
+    const animator = e?.userData[EXPORTED_ANIMATOR_USER_DATA_KEY] as ExportedEntityAnimator | undefined
+    animator?.event(status)
+  }
+
   /** Blocks an exported model draws (minecart contents, mooshroom mushrooms, the snow golem's pumpkin), and an item worn on the head. */
   attachExportedExtras(mesh: THREE.Object3D) {
     const build = mesh.userData[EXPORTED_BUILD_USER_DATA_KEY] as ExportedEntityBuild | undefined
@@ -1527,6 +1565,7 @@ export class Entities {
 
     this.applyEntityRenderHints(e, entity)
     e.userData[LAST_OVERRIDES_USER_DATA_KEY] = overrides
+    this.updateExportedAnimator(e, mesh, entity)
 
     // Update equipment
     this.updateEntityEquipment(e, entity)
