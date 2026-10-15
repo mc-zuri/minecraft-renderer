@@ -6,7 +6,7 @@ import fs from 'fs'
 
 const dev = process.env.NODE_ENV === 'development'
 
-const PLAYGROUND_VERSION = '1.16.5'
+const PLAYGROUND_VERSION = process.env.PLAYGROUND_VERSION ?? '1.16.5'
 
 export default defineConfig({
   html: {
@@ -90,8 +90,8 @@ export default defineConfig({
       setup(api) {
         api.onBeforeStartDevServer(async () => {
           const entityTexturesPath = './node_modules/mc-assets/dist/other-textures/latest/entity'
-          const destPath = './dist/playground/textures/entity'
-          if (fs.existsSync(entityTexturesPath)) {
+          const destPaths = ['./dist/playground/textures/entity', './dist/textures/entity']
+          for (const destPath of destPaths) if (fs.existsSync(entityTexturesPath)) {
             fs.mkdirSync(destPath, { recursive: true })
             // Simple recursive copy
             const copyRecursive = (src: string, dest: string) => {
@@ -105,6 +105,14 @@ export default defineConfig({
               }
             }
             copyRecursive(entityTexturesPath, destPath)
+          }
+          // the exported entity models, loaded as entity-models/<version>.json next to the page and the worker
+          const entityModelsPath = './node_modules/mc-assets/dist/entityModels'
+          if (fs.existsSync(entityModelsPath)) {
+            for (const dest of ['./dist/entity-models', './dist/playground/entity-models']) {
+              fs.mkdirSync(dest, { recursive: true })
+              for (const file of fs.readdirSync(entityModelsPath)) fs.copyFileSync(path.join(entityModelsPath, file), path.join(dest, file))
+            }
           }
         })
       }
