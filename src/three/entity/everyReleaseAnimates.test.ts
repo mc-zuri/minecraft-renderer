@@ -37,9 +37,21 @@ const playedVersions = (): string[] => require('minecraft-data').supportedVersio
 
 // what entities.ts does every frame for an exported entity whose animation code is ported: the client ticking from
 // the entity's input, the render state, the state an old export's models read, then the models' setupAnim
+/** Mobs that swing their legs walking, under their names in any version. */
+const WALKERS = ['pig', 'cow', 'sheep', 'chicken', 'zombie', 'skeleton', 'creeper', 'spider', 'villager', 'wolf', 'horse', 'iron_golem', 'villager_golem', 'polar_bear', 'llama', 'fox', 'goat']
+
+const bonePose = (object: THREE.Object3D) => {
+  const out: number[] = []
+  object.traverse(child => {
+    if (child instanceof THREE.Bone) out.push(child.rotation.x, child.rotation.y, child.rotation.z)
+  })
+  return out
+}
+
 describe('every release animates every entity', () => {
-  test.each(playedVersions())('%s: walking, every ported model poses without NaN', version => {
+  test.each(playedVersions())('%s: walking, every ported model poses without NaN, and the walkers swing their legs', version => {
     const failed: string[] = []
+    const stillWalkers: string[] = []
     let posed = 0
     const names = new Set<string>(require('minecraft-data')(version).entitiesArray.map((e: { name: string }) => entityModelName(e.name)))
     for (const name of names) {
@@ -73,6 +85,8 @@ describe('every release animates every entity', () => {
       }
       const exportVersion = entityExportVersionFor(version, exportedName) ?? version
       const dataNames = (getExportedEntity(version, exportedName) as { dataNames?: Record<string, string> } | undefined)?.dataNames ?? {}
+      let walkedFrom: number[] | undefined
+      let walkedMost = 0
       try {
         for (let tick = 0; tick < 12; tick++) {
           input.position = { x: tick * 0.15, y: 64, z: 0 }
@@ -81,6 +95,9 @@ describe('every release animates every entity', () => {
           const animState = entityAnimState(tracker, input)
           const modelState = versionNumber(exportVersion) < versionNumber('1.21.2') ? entityEraState(tracker, input, dataNames, animState) : animState
           applyExportedSetupAnim(build.rig, modelState)
+          const pose = bonePose(build.object)
+          if (tick === 1) walkedFrom = pose
+          else if (walkedFrom) walkedMost = Math.max(walkedMost, ...pose.map((value, i) => Math.abs(value - walkedFrom![i]!)))
         }
       } catch (err) {
         failed.push(`${name}: setupAnim threw ${String(err).slice(0, 120)}`)
@@ -91,9 +108,11 @@ describe('every release animates every entity', () => {
         if (child instanceof THREE.Bone && [child.position.x, child.position.y, child.position.z, child.rotation.x, child.rotation.y, child.rotation.z, child.scale.x, child.scale.y, child.scale.z].some(Number.isNaN)) nan.add(child.name)
       })
       if (nan.size) failed.push(`${name}: NaN ${[...nan].join(', ')}`)
+      if (WALKERS.includes(exportedName) && walkedMost < 0.1) stillWalkers.push(name)
       posed++
     }
     expect(failed).toEqual([])
+    expect(stillWalkers).toEqual([])
     expect(posed).toBeGreaterThan(20)
   })
 })
