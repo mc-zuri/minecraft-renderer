@@ -3,7 +3,7 @@ import path from 'path'
 import { createRequire } from 'module'
 import * as THREE from 'three'
 import { beforeAll, describe, expect, test, vi } from 'vitest'
-import { composeEntityLook, type EntityModelEntry } from 'mc-assets/dist/entityModels'
+import { composeEntityHead, composeEntityLook, type EntityModelEntry } from 'mc-assets/dist/entityModels'
 import {
   applyExportedEntityPose,
   buildExportedEntity,
@@ -253,7 +253,7 @@ function drawnQuads(version: string, entry: EntityModelEntry) {
 describe.each([reference26, reference1214, reference1204, reference1144, reference189] as unknown as Array<Record<string, Record<string, number[][][]> | string>>)('built meshes draw what $version draws', reference => {
   const version = reference.version as string
   for (const [name, entries] of Object.entries(reference)) {
-    if (typeof entries === 'string' || name === 'paintings' || name === 'animations') continue
+    if (typeof entries === 'string' || name === 'paintings' || name === 'animations' || name === 'heads') continue
     test(name, () => {
       const look = composeEntityLook(getExportedEntity(version, name)!)
       for (const [key, expected] of Object.entries(entries)) {
@@ -580,5 +580,75 @@ describe('versions between exports', () => {
     expect(buildExportedEntity('1.21.3', resolveExportedEntityName('1.21.3', 'creaking_transient'))).toBeTruthy()
     expect(resolveExportedEntityName('1.21.7', 'potion')).toBe('splash_potion')
     expect(resolveExportedEntityName('1.21.4', 'potion')).toBe('potion')
+  })
+})
+
+type HeadDraw = { label: string; item: string; poses: Record<string, Record<string, { pose?: number[]; scale?: number[] }>>; quads?: Record<string, number[][][]>; itemPose?: number[] }
+
+// the head items the game drew on a zombie and an armor stand, head at rest and turned, written by the exporter
+describe.each([reference26, reference1214, reference1204, reference1144, reference189] as unknown as Array<{ version: string; heads: Record<string, HeadDraw[]> }>)('head items drawn as $version draws them', reference => {
+  const version = reference.version
+  for (const [name, draws] of Object.entries(reference.heads)) {
+    test(name, () => {
+      const exportedName = resolveExportedEntityName(version, name)
+      const entity = getExportedEntity(version, exportedName)!
+      const look = composeEntityLook(entity)
+      expect(draws.length).toBeGreaterThan(4)
+      for (const draw of draws) {
+        const [itemName, damage] = draw.item === 'item' ? [draw.label.split(' ')[0]!, undefined] : draw.item.split(':')
+        const head = { name: itemName!, metadata: damage === undefined ? undefined : Number(damage), isBlock: itemName !== 'stick' && itemName !== 'diamond_boots' }
+        const build = buildExportedEntity(version, exportedName, { head })!
+        // the rig posed as the game's look posed it (the head turned)
+        for (const [key, poses] of Object.entries(draw.poses)) {
+          const entry = look.find(l => l.key === key)?.entry as EntityModelEntry | undefined
+          if (!entry) continue
+          for (const [relative, pose] of Object.entries(poses)) {
+            const part = build.rig.bones.get(`${entry.model}|${entry.part ?? ''}${relative}`)
+            if (!part || !pose.pose) continue
+            const [x = 0, y = 0, z = 0, xRot = 0, yRot = 0, zRot = 0] = pose.pose
+            part.bone.position.set(x, y, z)
+            part.bone.rotation.set(xRot, yRot, zRot, 'ZYX')
+            if (!part.hidden) part.bone.scale.set(pose.scale?.[0] ?? 1, pose.scale?.[1] ?? 1, pose.scale?.[2] ?? 1)
+          }
+        }
+        updateExportedHeadAnchor(build.rig)
+        const frame = build.rig.head!.group.matrix
+        const drawn = composeEntityHead(entity, {}, head, head.isBlock)!
+        if (draw.quads) {
+          for (const [key, expected] of Object.entries(draw.quads)) {
+            const relative = drawn.entries!.find(e => e.key === key)!.entry
+            const entry = { ...relative, transform: frame.clone().multiply(new THREE.Matrix4().fromArray(relative.transform)).toArray() }
+            const actual = drawnQuads(version, entry)
+            expect(actual.length, `${draw.label} ${key}`).toBe(expected.length)
+            for (const [q, quad] of expected.entries()) {
+              for (const [v, vertex] of quad.entries()) {
+                for (let c = 0; c < 5; c++) {
+                  if (Math.abs(actual[q]![v]![c]! - vertex[c]!) > (c < 3 ? 1e-4 : 1e-5)) throw new Error(`${draw.label} ${key} quad ${q} vertex ${v}: ${actual[q]![v]!.join(', ')}, the game draws ${vertex.join(', ')}`)
+                }
+              }
+            }
+          }
+        } else {
+          // the item's pose before its display transform: the holder's, from the anchor's frame
+          const pose = frame.clone().multiply(build.headItem!.holder.matrix).toArray()
+          for (let i = 0; i < 16; i++) {
+            if (Math.abs(pose[i]! - draw.itemPose![i]!) > 1e-4) throw new Error(`${draw.label}: item pose ${pose.join(', ')}, the game draws it with ${draw.itemPose!.join(', ')}`)
+          }
+        }
+      }
+    })
+  }
+})
+
+describe('baby armor', () => {
+  test('a baby zombie wears the armor the game draws on babies', () => {
+    const zombie = getExportedEntity(VERSION, 'zombie')!
+    const variant = zombie.armorVariants?.[0]
+    expect(variant).toBeTruthy()
+    const metadata = Object.fromEntries(variant!.when.map(c => ['index' in c ? c.index : 0, 'value' in c ? c.value : true]))
+    const baby = exportedEntityLook(zombie, { metadata, equipment: { chest: 'iron_chestplate' } }).filter(({ key }) => key.startsWith('armor/'))
+    const adult = exportedEntityLook(zombie, { equipment: { chest: 'iron_chestplate' } }).filter(({ key }) => key.startsWith('armor/'))
+    expect(baby).not.toEqual(adult)
+    expect(baby.map(({ entry }) => entry)).toEqual(Object.values(variant!.armor.chest!.iron_chestplate!.entries))
   })
 })

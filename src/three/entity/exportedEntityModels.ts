@@ -304,7 +304,7 @@ const headDraw = (entity: EntityDefinition, input: ExportedLookInput) => (input.
 
 /**
  * Everything an exported entity draws for its metadata and equipment: its look (with what wearing a head item changes
- * in it), then the armor it wears with the trims of its pieces.
+ * in it), then the armor it wears (a baby's own) with the trims of its pieces.
  */
 export const exportedEntityLook = (entity: EntityDefinition, input: ExportedLookInput = {}, trims?: TrimsData) => {
   let look = composeEntityLook(entity, input)
@@ -314,7 +314,7 @@ export const exportedEntityLook = (entity: EntityDefinition, input: ExportedLook
     applyEntityPatch(entries, worn)
     look = [...entries].map(([key, entry]) => ({ key, entry: entry as unknown as EntityLookEntry }))
   }
-  return [...look, ...composeEntityArmor(entity, input.equipment, input.equipmentColors, input.trims, trims)]
+  return [...look, ...composeEntityArmor(entity, input.equipment, input.equipmentColors, input.trims, trims, input)]
 }
 
 /** Identifies a look: rebuild the mesh when it changes (the head item too). */
