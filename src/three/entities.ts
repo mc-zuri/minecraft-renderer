@@ -403,7 +403,12 @@ function getEntityMesh(
       if (entityName === 'painting') {
         // PaintingRenderer's quads from the export, relative to the painting's block
         const painting = buildExportedPainting(world.version, paintingInputFromEntity(entity as never, paintingMetadataKeys(mcData)))
-        if (painting) return painting
+        if (painting) {
+          // HangingEntity.setPos: the painting hangs from the block its position is in (BlockPos.containing)
+          const position = entity.position ?? (entity as { pos?: { x: number; y: number; z: number } }).pos
+          if (position) painting.position.set(Math.floor(position.x) - position.x, Math.floor(position.y) - position.y, Math.floor(position.z) - position.z)
+          return painting
+        }
         // the version's export loads: nothing yet, built again once it is
         if (isEntityModelsVersionCovered(world.version) && !getEntityModelsStore(world.version)) {
           const pending = new THREE.Group()
