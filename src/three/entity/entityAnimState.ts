@@ -2,6 +2,7 @@ import { f, lerp, wrapDegrees } from './setupAnim/mth'
 import { TickedWalk } from './setupAnim/walkAnimation'
 import type { AnimState } from './setupAnim/types'
 import type { EntityRenderHints } from './interpolationPolicy'
+import { isBoatEntityName } from './boatModelRotation'
 
 /**
  * The render state the game's renderers extract from an entity each frame (EntityRenderState and its subclasses), made
@@ -186,13 +187,13 @@ export class EntityAnimTracker {
     if (using && !this.using) this.useTicks = 0
     else if (using) this.useTicks++
     this.using = using
-    ENTITY_DRIVERS[input.name]?.tick?.(this, input)
+    driverOf(input.name)?.tick?.(this, input)
   }
 
   /** An entity event (entity_status) the server sent. */
   event(id: number) {
-    if (this.input) ENTITY_DRIVERS[this.input.name]?.event?.(this, id, this.input)
-    else ENTITY_DRIVERS[this.name]?.event?.(this, id, undefined)
+    if (this.input) driverOf(this.input.name)?.event?.(this, id, this.input)
+    else driverOf(this.name)?.event?.(this, id, undefined)
   }
 
   /** An arm swing (the animate packet: 0 main hand, 3 off hand). */
@@ -268,6 +269,10 @@ export type EntityDriver = {
 export const ENTITY_DRIVERS: Record<string, EntityDriver> = {}
 
 export const registerEntityDrivers = (drivers: Record<string, EntityDriver>) => Object.assign(ENTITY_DRIVERS, drivers)
+
+/** An entity's driver; a boat or raft of a wood newer than the driver lists (26.3's poplar) drives as every boat. */
+const driverOf = (name: string): EntityDriver | undefined =>
+  ENTITY_DRIVERS[name] ?? (isBoatEntityName(name) ? ENTITY_DRIVERS[name.endsWith('_raft') ? 'bamboo_raft' : 'oak_boat'] : undefined)
 
 /**
  * The render state of an entity now: LivingEntityRenderer's, ArmedEntityRenderState's and HumanoidMobRenderer's fields
@@ -349,7 +354,7 @@ export function entityAnimState(tracker: EntityAnimTracker, input: EntityAnimInp
   state.rightHandItem = state.mainArm === 'RIGHT' ? state.mainHandItem : state.offHandItem
   state.leftHandItem = state.mainArm === 'RIGHT' ? state.offHandItem : state.mainHandItem
   for (const [field, start] of Object.entries(tracker.animationStates)) state[field] = start
-  ENTITY_DRIVERS[input.name]?.state?.(state, tracker, input)
+  driverOf(input.name)?.state?.(state, tracker, input)
   return state
 }
 

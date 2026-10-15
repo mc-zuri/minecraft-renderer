@@ -149,6 +149,24 @@ describe('what drives a boat', () => {
     expect(entityAnimState(tracker, input(false, false)).rowingTimeLeft).toBe(0)
   })
 
+  test('a boat of a wood the driver list does not name (26.3 poplar) drives and poses as every boat', () => {
+    for (const name of ['poplar_boat', 'poplar_chest_boat']) {
+      const boat = { ...input(true, true), name }
+      const tracker = new EntityAnimTracker(name, '26.3')
+      tracker.setInput(boat)
+      for (let i = 0; i < 3; i++) tracker.tick()
+      const state = entityAnimState(tracker, boat)
+      expect(state.rowingTimeLeft, name).toBeCloseTo(2 * Math.fround(Math.PI / 8), 6)
+      const build = buildExportedEntity('26.3', name)!
+      applyExportedSetupAnim(build.rig, state)
+      const nan: string[] = []
+      build.object.traverse(child => {
+        if ([child.position.x, child.position.y, child.position.z, child.rotation.x, child.rotation.y, child.rotation.z].some(Number.isNaN)) nan.push(child.name)
+      })
+      expect(nan, name).toEqual([])
+    }
+  })
+
   test('the hurt wobble counts the synched hurt time and damage down every tick like the client', () => {
     const tracker = new EntityAnimTracker('oak_boat', '26.3')
     tracker.setInput(input(false, false, { hurt: 10, damage: 20, hurtdir: -1 }))
