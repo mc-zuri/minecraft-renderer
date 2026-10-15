@@ -31,6 +31,7 @@ import {
 } from 'mc-assets/dist/entityModels'
 import { createCanvas } from '../../lib/utils'
 import { loadThreeJsTextureFromUrlSync } from '../threeJsUtils'
+import { legacyArrowQuads } from './legacyArrow'
 import { AnimModel, ModelPose, animContext, animModelsFor, type AnimState, type PartPose } from './setupAnim'
 import { BOAT_WATER_PATCH_NAME, BOAT_WATER_PATCH_RENDER_ORDER, createBoatWaterPatchMaterial } from './boatRenderSetup'
 
@@ -733,6 +734,9 @@ export function buildExportedEntity(version: string, name: string, input: Export
       result.blocks.push(entry)
     } else if (entry.type === 'item') {
       result.items.push(entry)
+    } else if (entry.type === 'custom' && ARROW_NAMES.has(name)) {
+      // ArrowRenderer before 1.21.2 drew the arrow quad by quad: its geometry, the export's texture
+      object.add(buildLegacyArrow(entry.texture as string, version))
     } else {
       result.custom.push(entry)
     }
@@ -1117,6 +1121,39 @@ export function buildExportedPainting(version: string, input: PaintingInput): TH
 
 export const PAINTING_SIGNATURE_USER_DATA_KEY = '_exportedPaintingSignature'
 export const paintingSignature = (input: PaintingInput) => JSON.stringify(input)
+
+/** The arrows ArrowRenderer draws (spectral and tipped arrows too). */
+const ARROW_NAMES = new Set(['arrow', 'spectral_arrow', 'tipped_arrow'])
+
+/** ArrowRenderer's arrow before 1.21.2 (see {@link legacyArrowQuads}), textured as the export says. */
+function buildLegacyArrow(texture: string, version: string) {
+  const positions: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+  for (const quad of legacyArrowQuads()) {
+    const start = positions.length / 3
+    for (const [x, y, z, u, v] of quad) {
+      positions.push(x!, y!, z!)
+      uvs.push(u!, v!)
+    }
+    indices.push(start, start + 1, start + 2, start, start + 2, start + 3)
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.setIndex(indices)
+  geometry.computeVertexNormals()
+  const material = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide, alphaTest: 0.1 })
+  void loadEntityTexture(texture, undefined, version)
+    .then(map => {
+      material.map = map
+      material.needsUpdate = true
+    })
+    .catch(() => {})
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.name = 'legacy_arrow'
+  return mesh
+}
 
 /** Does the entity draw a model of its own (not only items, blocks or custom geometry)? */
 export const exportedEntityHasModel = (version: string, name: string) => {

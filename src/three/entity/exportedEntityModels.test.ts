@@ -100,8 +100,8 @@ const DRAWN_ELSEWHERE_BEFORE_1_15: Record<string, string> = {
 
 /** Older versions: what their renderers draw as custom geometry, drawn by the older models. */
 const DRAWN_ELSEWHERE_BEFORE_1_21_2: Record<string, string> = {
-  arrow: 'custom geometry, OBJ model',
-  spectral_arrow: 'custom geometry, OBJ model'
+  arrow: 'custom geometry: ArrowRenderer quads (legacyArrow)',
+  spectral_arrow: 'custom geometry: ArrowRenderer quads (legacyArrow)'
 }
 
 /** minecraft-data's entity names as entities.ts looks them up (PigZombie: pig_zombie). */
