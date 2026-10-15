@@ -17,7 +17,9 @@ import {
   prismarineToGameHeadAngles,
   type ExportedPart
 } from './exportedEntityModels'
-import reference from './fixtures/entityReferenceQuads-26.3.json'
+import reference26 from './fixtures/entityReferenceQuads-26.3.json'
+import reference1214 from './fixtures/entityReferenceQuads-1.21.4.json'
+import reference1204 from './fixtures/entityReferenceQuads-1.20.4.json'
 
 // textures are fetched in the browser; the meshes are checked without them
 vi.mock('../threeJsUtils', () => ({ loadTexture: async () => {} }))
@@ -56,19 +58,34 @@ const NOT_DRAWN: Record<string, string> = {
   item_display: 'display entity, drawn by its item'
 }
 
-const allEntities = (): string[] => {
-  const mcData = require('minecraft-data')(VERSION)
+/** Older versions: what their renderers draw as custom geometry, drawn by the older models. */
+const DRAWN_ELSEWHERE_BEFORE_1_21_2: Record<string, string> = {
+  arrow: 'custom geometry, OBJ model',
+  spectral_arrow: 'custom geometry, OBJ model'
+}
+
+const allEntities = (version = VERSION): string[] => {
+  const mcData = require('minecraft-data')(version)
   return mcData.entitiesArray.map((e: { name: string }) => e.name)
+}
+
+/** Exported versions minecraft-data has entities of (it reads 1.21.2 as 1.21). */
+const dataVersions = () => getEntityModelsStore().versions.filter(version => require('minecraft-data')(version)?.version.minecraftVersion === version)
+
+const versionNumber = (version: string) => {
+  const [x, y = '0', z = '0'] = version.split('.')
+  return +`${x.padStart(2, '0')}${y.padStart(2, '0')}${z.padStart(2, '0')}`
 }
 
 const textureFile = (texture: string) => path.join(mcAssetsDist, 'other-textures/latest', entityTextureUrl(texture).replace(/^textures\//, ''))
 
-describe('exported entity models (26.3)', () => {
-  test('every entity draws an exported model, an item, or is drawn elsewhere or not at all, on purpose', () => {
+describe('exported entity models', () => {
+  test.each(dataVersions())('%s: every entity draws an exported model, an item, or is drawn elsewhere or not at all, on purpose', version => {
     const uncovered: string[] = []
-    for (const name of allEntities()) {
-      if (DRAWN_ELSEWHERE[name] || NOT_DRAWN[name]) continue
-      const exported = getExportedEntity(VERSION, name)
+    const elsewhere = { ...DRAWN_ELSEWHERE, ...(versionNumber(version) < versionNumber('1.21.2') ? DRAWN_ELSEWHERE_BEFORE_1_21_2 : {}) }
+    for (const name of allEntities(version)) {
+      if (elsewhere[name] || NOT_DRAWN[name]) continue
+      const exported = getExportedEntity(version, name)
       if (!exported) {
         uncovered.push(`${name}: not exported`)
         continue
@@ -86,10 +103,10 @@ describe('exported entity models (26.3)', () => {
     expect(Object.keys({ ...DRAWN_ELSEWHERE, ...NOT_DRAWN }).filter(name => !names.has(name))).toEqual([])
   })
 
-  test('every texture of every look exists in mc-assets', () => {
+  test.each(dataVersions())('%s: every texture of every look exists in mc-assets', version => {
     const missing = new Set<string>()
-    for (const name of allEntities()) {
-      const exported = getExportedEntity(VERSION, name)
+    for (const name of allEntities(version)) {
+      const exported = getExportedEntity(version, name)
       for (const state of exported?.states ?? []) {
         for (const entry of Object.values(state.look ?? state.patch ?? {})) {
           const texture = entry?.texture as string | undefined
@@ -120,8 +137,8 @@ describe('exported entity models (26.3)', () => {
 })
 
 /** The quads a built model entry draws, in entity space, skipping parts the pose hides (as ModelPart.render skips them). */
-function drawnQuads(entry: EntityModelEntry) {
-  const layer = getEntityModelsStore().getModel(VERSION, entry.model)!
+function drawnQuads(version: string, entry: EntityModelEntry) {
+  const layer = getEntityModelsStore().getModel(version, entry.model)!
   const parts = new Map<string, ExportedPart[]>()
   const holder = buildModelEntry(entry, layer, parts)
   holder.updateMatrixWorld(true)
@@ -150,15 +167,18 @@ function drawnQuads(entry: EntityModelEntry) {
   return quads
 }
 
-describe('built meshes draw what the game draws', () => {
-  for (const [name, entries] of Object.entries(reference as Record<string, Record<string, number[][][]> | string>)) {
+// the game's quads for a few entities, written by the exporter: 26.3 (submit node collectors), 1.21.4 (render states,
+// buffers) and 1.20.4 (entities drawn part by part)
+describe.each([reference26, reference1214, reference1204] as Array<Record<string, Record<string, number[][][]> | string>>)('built meshes draw what $version draws', reference => {
+  const version = reference.version as string
+  for (const [name, entries] of Object.entries(reference)) {
     if (typeof entries === 'string') continue
     test(name, () => {
-      const look = composeEntityLook(getExportedEntity(VERSION, name)!)
+      const look = composeEntityLook(getExportedEntity(version, name)!)
       for (const [key, expected] of Object.entries(entries)) {
         const entry = look.find(l => l.key === key)?.entry as EntityModelEntry
         expect(entry, key).toBeTruthy()
-        const actual = drawnQuads(entry)
+        const actual = drawnQuads(version, entry)
         expect(actual.length, key).toBe(expected.length)
         for (const [q, quad] of expected.entries()) {
           for (const [v, vertex] of quad.entries()) {
