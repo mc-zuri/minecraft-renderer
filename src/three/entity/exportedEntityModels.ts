@@ -737,6 +737,8 @@ export function buildExportedEntity(version: string, name: string, input: Export
     } else if (entry.type === 'custom' && ARROW_NAMES.has(name)) {
       // ArrowRenderer before 1.21.2 drew the arrow quad by quad: its geometry, the export's texture
       object.add(buildLegacyArrow(entry.texture as string, version))
+    } else if (entry.type === 'custom' && /DragonFireball/.test((entity as { renderer?: string }).renderer ?? '')) {
+      object.add(buildDragonFireball(entry.texture as string, version))
     } else {
       result.custom.push(entry)
     }
@@ -1153,6 +1155,25 @@ function buildLegacyArrow(texture: string, version: string) {
   const mesh = new THREE.Mesh(geometry, material)
   mesh.name = 'legacy_arrow'
   return mesh
+}
+
+/**
+ * DragonFireballRenderer: a quad of the export's texture facing the camera (cameraOrientation), scaled 2, from -0.5 to
+ * 0.5 across and -0.25 to 0.75 up, fully lit (LightTexture.FULL_BRIGHT).
+ */
+function buildDragonFireball(texture: string, version: string) {
+  const material = new THREE.SpriteMaterial({ alphaTest: 0.1 })
+  void loadEntityTexture(texture, undefined, version)
+    .then(map => {
+      material.map = map
+      material.needsUpdate = true
+    })
+    .catch(() => {})
+  const sprite = new THREE.Sprite(material)
+  sprite.center.set(0.5, 0.25)
+  sprite.scale.set(2, 2, 1)
+  sprite.name = 'dragon_fireball'
+  return sprite
 }
 
 /** Does the entity draw a model of its own (not only items, blocks or custom geometry)? */

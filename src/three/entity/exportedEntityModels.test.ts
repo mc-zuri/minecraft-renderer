@@ -619,6 +619,14 @@ describe('versions between exports', () => {
     expect(resolveExportedEntityName('1.21.7', 'potion')).toBe('splash_potion')
     expect(resolveExportedEntityName('1.21.4', 'potion')).toBe('potion')
   })
+
+  // DragonFireballRenderer: a quad of the export's texture facing the camera, scaled 2, from -0.25 to 0.75 up
+  test.each(['1.10.2', '1.12.2', '26.3'])('%s: the dragon fireball is its texture facing the camera', version => {
+    const build = buildExportedEntity(version, resolveExportedEntityName(version, 'dragon_fireball'))
+    const sprite = build?.object.children.find(child => child instanceof THREE.Sprite) as THREE.Sprite | undefined
+    expect(sprite).toBeTruthy()
+    expect([sprite!.scale.x, sprite!.scale.y, sprite!.center.x, sprite!.center.y]).toEqual([2, 2, 0.5, 0.25])
+  })
 })
 
 type HeadDraw = { label: string; item: string; poses: Record<string, Record<string, { pose?: number[]; scale?: number[] }>>; quads?: Record<string, number[][][]>; itemPose?: number[] }
