@@ -408,6 +408,8 @@ function getEntityMesh(
           // HangingEntity.setPos: the painting hangs from the block its position is in (BlockPos.containing)
           const position = entity.position ?? (entity as { pos?: { x: number; y: number; z: number } }).pos
           if (position) painting.position.set(Math.floor(position.x) - position.x, Math.floor(position.y) - position.y, Math.floor(position.z) - position.z)
+          // drawn from the export's painting quads (PaintingRenderer)
+          painting.userData[EXPORTED_LOOK_USER_DATA_KEY] = 'custom'
           return painting
         }
         // the version's export loads: nothing yet, built again once it is
@@ -458,6 +460,8 @@ function getEntityMesh(
 
 /** An entity mesh drawn with the older model while the entity's export loads. */
 const AWAITING_EXPORT_USER_DATA_KEY = '_awaitingExportedEntityModels'
+/** The mesh is drawn from an export's look that is no entity model: an item, a block, a painting's quads. */
+const EXPORTED_LOOK_USER_DATA_KEY = '_exportedLook'
 /** The overrides an entity was last updated with, to build it again. */
 const LAST_OVERRIDES_USER_DATA_KEY = '_lastEntityOverrides'
 
@@ -1584,7 +1588,8 @@ export class Entities {
       const group = new THREE.Group() as unknown as SceneEntity
       group.originalEntity = entity
       const itemName = entityModelName(entity.name ?? '')
-      const itemEntity = exportedItemEntity(this.worldRenderer.version, itemName) ?? thrownItemOf(itemName, this.mcData?.itemsByName)
+      const fromExport = exportedItemEntity(this.worldRenderer.version, itemName)
+      const itemEntity = fromExport ?? thrownItemOf(itemName, this.mcData?.itemsByName)
       if (itemEntity) {
         // the item the entity carries (synched data: a potion's own potion, a firework's own rocket), else its default
         const carried = metadataAsArray(entity.metadata)?.find((m: any) => typeof m === 'object' && m?.itemCount && (m.itemId !== undefined || m.blockId !== undefined))
@@ -1594,6 +1599,10 @@ export class Entities {
           // the item mesh has the ground scale (0.5): the renderer's own on top, the middle lifted as the game draws it
           mesh.scale.multiplyScalar(itemEntity.scale)
           mesh.position.set(0, itemEntity.lift, 0)
+          // drawn from the export's item look (ThrownItemRenderer and the like)
+          if (fromExport) mesh.userData[EXPORTED_LOOK_USER_DATA_KEY] = 'item'
+          // or its custom look the renderer ports (before 1.13 FireballEntityRenderer draws the fire charge)
+          else if (entityExportVersionFor(this.worldRenderer.version, itemName)) mesh.userData[EXPORTED_LOOK_USER_DATA_KEY] = 'custom'
           group.additionalCleanup = () => object.cleanup?.()
         }
       } else if (entity.name === 'item' || BLOCK_ENTITIES[itemName]) {
@@ -1620,6 +1629,8 @@ export class Entities {
             } else {
               mesh.scale.set(2, 2, 2)
               mesh.position.set(0, 0.5, 0)
+              // drawn as the export's block look (TntRenderer, FallingBlockRenderer)
+              if (entityExportVersionFor(this.worldRenderer.version, itemName)) mesh.userData[EXPORTED_LOOK_USER_DATA_KEY] = 'block'
             }
             // set faces
             // mesh.position.set(targetPos.x + 0.5 + 2, targetPos.y + 0.5, targetPos.z + 0.5)
