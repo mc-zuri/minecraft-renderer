@@ -8,6 +8,7 @@ import { animContext, floatState } from './setupAnim'
 import { EntityAnimTracker, entityAnimState, registerEntityDrivers } from './entityAnimState'
 import { BOATS_DRIVERS } from './drivers/boats'
 import reference26 from './fixtures/entityReferenceQuads-26.3.json'
+import reference1204 from './fixtures/entityReferenceQuads-1.20.4.json'
 
 vi.mock('../threeJsUtils', () => ({ loadThreeJsTextureFromUrlSync: () => ({ promise: new Promise(() => {}) }) }))
 
@@ -16,6 +17,7 @@ const mcAssetsDist = path.dirname(require.resolve('mc-assets/dist/entityModels.j
 setEntityModelsSource({ load: async exportVersion => JSON.parse(fs.readFileSync(path.join(mcAssetsDist, 'entityModels', `${exportVersion}.json`), 'utf8')) })
 beforeAll(async () => {
   await loadEntityModels('26.3')
+  await loadEntityModels('1.20.4')
 })
 
 type BoatDraw = { state: number[]; entries: Record<string, number[][][]> }
@@ -61,6 +63,48 @@ describe.each(Object.entries((reference26 as unknown as { boats: Record<string, 
     // the scene turns an entity by its prismarine yaw: PI - yRot (the game's 180 - yRot degrees)
     build.object.rotation.y = THREE.MathUtils.degToRad(180 - yRot)
     if (!isUnderWater && build.object.userData.boatWaterPatch) build.object.userData.boatWaterPatch.visible = true
+    const actual = entryQuads(build.object)
+    const expected = Object.values(draw.entries)
+    expect(actual.length).toBe(expected.length)
+    for (const [e, quads] of expected.entries()) {
+      expect(actual[e]!.length).toBe(quads.length)
+      const water = Object.keys(draw.entries)[e]!.includes('water_patch')
+      for (const [q, quad] of quads.entries()) {
+        for (const [v, vertex] of quad.entries()) {
+          for (let c = 0; c < (water ? 3 : 5); c++) {
+            if (!(Math.abs(actual[e]![q]![v]![c]! - vertex[c]!) <= 1e-4)) throw new Error(`${Object.keys(draw.entries)[e]} quad ${q} vertex ${v}: ${actual[e]![q]![v]!.join(', ')}, the game draws ${vertex.join(', ')}`)
+          }
+        }
+      }
+    }
+  })
+})
+
+// 1.20.4 (models posed from the entity): the boat's paddles row by Boat.getRowingTime with the player controlling it
+// (the renderer passes the partial tick, 0 here, as setupAnim's first argument), the same rocking
+describe.each(Object.entries((reference1204 as unknown as { boats: Record<string, BoatDraw[]> }).boats))('1.20.4 %s as BoatRenderer draws it', (name, draws) => {
+  test.each(draws.map(draw => [draw.state.join(', '), draw] as const))('yRot, hurt, damage, dir, bubble, paddles, positions: %s', (_label, draw) => {
+    const build = buildExportedEntity('1.20.4', name)!
+    expect(build.rig.anims.length).toBeGreaterThan(0)
+    const [yRot, hurtTime, damage, hurtDir, bubbleAngle, paddleLeft, paddleRight, positionLeft, positionRight] = draw.state as number[]
+    const dataNames = (build as unknown as { dataNames?: Record<string, string> }).dataNames ?? Object.fromEntries(Object.entries(require('mc-assets/dist/entityModels/1.20.4.json').entities.latest[name].dataNames ?? {}))
+    const index = (key: string) => Object.entries(dataNames).find(([, value]) => value === key)![0]
+    const modelState = floatState({
+      walkAnimationPos: 0,
+      walkAnimationSpeed: 0,
+      ageInTicks: -0.1,
+      yRot: 0,
+      xRot: 0,
+      partialTick: 0,
+      dataNames,
+      [`data.${index('id_paddle_left')}`]: paddleLeft !== 0,
+      [`data.${index('id_paddle_right')}`]: paddleRight !== 0,
+      'entity.paddlePositions': [positionLeft, positionRight]
+    })
+    applyExportedSetupAnim(build.rig, modelState)
+    applyBoatRock(build.rig, floatState({ hurtTime: hurtTime!, damageTime: damage!, hurtDir: hurtDir!, bubbleAngle: bubbleAngle!, isUnderWater: false }), animContext('1.20.4').sin)
+    build.object.rotation.y = THREE.MathUtils.degToRad(180 - yRot!)
+    if (build.object.userData.boatWaterPatch) build.object.userData.boatWaterPatch.visible = true
     const actual = entryQuads(build.object)
     const expected = Object.values(draw.entries)
     expect(actual.length).toBe(expected.length)

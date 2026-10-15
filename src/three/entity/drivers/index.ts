@@ -1,4 +1,6 @@
-import { registerEntityDrivers, type EntityDriver } from '../entityAnimState'
+import { registerEntityDrivers, registerEntityEraAdapters, type EntityDriver } from '../entityAnimState'
+import { ENTITY_ERA_MOBS_ADAPTERS } from './entityEra/mobs'
+import { ENTITY_ERA_ANIMALS_ADAPTERS } from './entityEra/animals'
 import { HUMANOID_DRIVERS } from './humanoid'
 import { QUADRUPEDS_DRIVERS } from './quadrupeds'
 import { EQUINES_DRIVERS } from './equines'
@@ -21,3 +23,4 @@ export const DRIVERS: Record<string, EntityDriver> = {
 }
 
 registerEntityDrivers(DRIVERS)
+registerEntityEraAdapters({ ...ENTITY_ERA_MOBS_ADAPTERS, ...ENTITY_ERA_ANIMALS_ADAPTERS })

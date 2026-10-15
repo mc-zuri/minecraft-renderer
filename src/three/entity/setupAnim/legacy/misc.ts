@@ -258,6 +258,20 @@ export class ElytraModel extends LegacyEntityModel {
  * 1.12 (the model multiplies the phase by 40) and (float) (PI / 8) from 1.12 on. 1.8.9's boat has no paddles.
  */
 export class BoatEntityModel extends LegacyEntityModel {
+  /**
+   * The paddles as render() poses them every frame, when the renderer gives the rowing times (entity.rowingTimes: the
+   * interpolated paddle phases, 0 while a paddle is still: the paddle's resting angle); the samples (setAngles alone)
+   * give none.
+   */
+  override setupAnim(state: AnimState) {
+    super.setupAnim(state)
+    const rowing = state['entity.rowingTimes'] as number[] | undefined
+    if (rowing && this.c.atLeast('1.9')) {
+      this.posePaddle(0, rowing[0] ?? 0)
+      this.posePaddle(1, rowing[1] ?? 0)
+    }
+  }
+
   /** method_12219(boat, i, scale, tickDelta) without the render: paddle i at phase interpolatePaddlePhase(i, tickDelta) */
   posePaddle(i: 0 | 1, interpolatedPhase: number) {
     const { sin } = this.c

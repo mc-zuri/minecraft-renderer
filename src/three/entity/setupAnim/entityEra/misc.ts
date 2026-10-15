@@ -526,6 +526,19 @@ export class BoatModel extends EntityEraModel {
 
   override entitySetupAnim(state: AnimState) {
     for (const [i, paddle] of this.paddles.entries()) this.animatePaddle(state, i, paddle, num(state, 'walkAnimationPos'))
+    // 1.14.4 poses the paddles in render(), every frame, from Boat.getRowingTime: when the renderer gives the rowing times
+    const rowing = state['entity.rowingTimes'] as number[] | undefined
+    if (!this.c.atLeast('1.15') && rowing) {
+      const { sin } = this.c
+      for (const [i, name] of ['paddles_0', 'paddles_1'].entries()) {
+        const paddle = this.model.maybe(name)
+        if (!paddle) continue
+        const g = rowing[i] ?? 0
+        paddle.xRot = f(clampedLerpDouble(f(-Math.PI / 3), f(-Math.PI / 12), f(f(sin(-g) + 1) / 2)))
+        paddle.yRot = f(clampedLerpDouble(f(-Math.PI / 4), f(Math.PI / 4), f(f(sin(f(-g + 1)) + 1) / 2)))
+        if (i === 1) paddle.yRot = f(PI - paddle.yRot)
+      }
+    }
   }
 
   private rowingTime(state: AnimState, i: number, partialTick: number) {
@@ -761,6 +774,10 @@ class EntityEraWindChargeModel extends AnimModel {
 }
 
 export const ENTITY_ERA_MISC_MODELS: Record<string, AnimModelClass> = {
+  // the same paddles (left_paddle / right_paddle, Boat.getRowingTime)
+  ChestBoatModel: BoatModel,
+  RaftModel: BoatModel,
+  ChestRaftModel: BoatModel,
   WindChargeModel: EntityEraWindChargeModel,
   // 1.14.4 turns the crystal's cubes in render(), not in setupAnim
   EndCrystalModel: AnimModel,

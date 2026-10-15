@@ -234,8 +234,8 @@ export class EntityAnimTracker {
 /** Entities that walk in 3D (LivingEntity.omnidirectionalAirMover: flying and swimming mobs). */
 const OMNIDIRECTIONAL = new Set(['bat', 'bee', 'allay', 'vex', 'blaze', 'ghast', 'happy_ghast', 'parrot', 'phantom', 'ender_dragon', 'wither', 'breeze'])
 
-/** 1.19.4 made a baby's walk position three times as fast. */
-const babyWalkScale = (version: string, baby: boolean) => (baby && versionAtLeast(version, '1.19.4') ? 3 : 1)
+/** A baby's walk position goes three times as fast (WalkAnimationState's positionScale since 1.19.4, LivingEntityRenderer's limbSwing * 3 before). */
+const babyWalkScale = (_version: string, baby: boolean) => (baby ? 3 : 1)
 
 const versionAtLeast = (version: string, other: string) => {
   const n = (v: string) => v.split('.').reduce((total, part, i) => total + Number(part) * [1_000_000, 1000, 1][i]!, 0)
@@ -418,7 +418,8 @@ export function entityEraState(tracker: EntityAnimTracker, input: EntityAnimInpu
     'entity.ticksAlive': tracker.tickCount,
     'entity.age': tracker.tickCount,
     'entity.onGround': input.onGround ?? false,
-    'entity.deltaMovement': [velocity.x, velocity.y, velocity.z],
+    // read as [x, y, z] and as {x, y, z} by different ports
+    'entity.deltaMovement': Object.assign([velocity.x, velocity.y, velocity.z], { x: velocity.x, y: velocity.y, z: velocity.z }),
     'entity.xRot': renderState.xRot,
     'entity.xRotO': renderState.xRot,
     'entity.yHeadRot': toDegrees(input.headYaw),

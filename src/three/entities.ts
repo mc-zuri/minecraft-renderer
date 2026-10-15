@@ -1410,7 +1410,12 @@ export class Entities {
     const dataNames = (getExportedEntity(this.worldRenderer.version, entityModelName(entity.name ?? '')) as { dataNames?: Record<string, string> } | undefined)?.dataNames
     if (dataNames) {
       meta = { ...meta }
-      for (const [index, key] of Object.entries(dataNames)) if (meta[key] === undefined && data[Number(index)] !== undefined) meta[key] = data[Number(index)]
+      for (const [index, key] of Object.entries(dataNames)) {
+        const value = data[Number(index)]
+        if (value === undefined) continue
+        // minecraft-data drops the id_ the game's DATA_ID_* names keep (horse and panda flags: flags)
+        for (const name of [key, key.replace(/^id_/, '')]) if (meta[name] === undefined) meta[name] = value
+      }
     }
     const customName = typeof meta.custom_name === 'string' ? meta.custom_name : undefined
     e.userData[ANIM_INPUT_USER_DATA_KEY] = {

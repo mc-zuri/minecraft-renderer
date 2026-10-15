@@ -1,6 +1,11 @@
 import type { EntityAnimInput, EntityAnimTracker, EntityDriver } from '../entityAnimState'
 import { clampedLerp, f, lerp } from '../setupAnim/mth'
 
+const versionAtLeast = (version: string, other: string) => {
+  const n = (v: string) => v.split('.').reduce((total, part, i) => total + Number(part) * [1_000_000, 1000, 1][i]!, 0)
+  return n(version) >= n(other)
+}
+
 /**
  * Boats and rafts (AbstractBoat, Boat before 1.21.2): the render state BoatRenderer extracts. Paddles turn by PI/8 a tick
  * while their paddle state holds (the paddle_left / paddle_right synched data and a controlling passenger, or what the
@@ -48,7 +53,11 @@ export const boatDriver: EntityDriver = {
     // tickBubbleColumn (client)
     memory.bubbleMultiplier = Math.min(1, Math.max(0, f(memory.bubbleMultiplier + (numberOf(input.meta.bubble_time) > 0 ? f(0.05) : f(-0.1)))))
     memory.bubbleAngleO = memory.bubbleAngle
-    memory.bubbleAngle = f(f(10 * f(Math.sin(0.5 * tracker.tickCount))) * memory.bubbleMultiplier)
+    // 1.21.5 on: the boat's own tick count; before, the level's game time (the client's tick count stands in when the
+    // client gives no world age: only the rocking's phase differs)
+    memory.bubbleAngle = versionAtLeast(input.version, '1.21.5')
+      ? f(f(10 * f(Math.sin(0.5 * tracker.tickCount))) * memory.bubbleMultiplier)
+      : f(f(10 * f(Math.sin(f(0.5 * f(input.gameTime ?? tracker.tickCount))))) * memory.bubbleMultiplier)
     for (const side of [0, 1] as const) {
       if (boatPaddleState(input, side)) memory.paddlePositions[side] = f(memory.paddlePositions[side] + PADDLE_STEP)
       else memory.paddlePositions[side] = 0
