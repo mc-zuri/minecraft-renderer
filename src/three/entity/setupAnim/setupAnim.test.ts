@@ -24,6 +24,8 @@ type Sampled = {
   initial?: { hidden?: string[]; skipDraw?: string[] }
   /** entity-era samples: synched data index -> name */
   dataNames?: Record<string, string>
+  /** entity-era samples: the entity's class (models that pose by it: illagers) */
+  entityClass?: string
   samples: Sample[]
 }
 type Fixture = { version: string; models: Record<string, Sampled> }
@@ -46,6 +48,9 @@ const descend = (root: EntityModelPart, part: string | undefined) => {
   return current
 }
 
+/** setupAnim's arguments the entity-era samples leave out when they are 0 (the first sample: all of them) */
+const SETUP_ARGUMENTS = { walkAnimationPos: 0, walkAnimationSpeed: 0, ageInTicks: 0, yRot: 0, xRot: 0, partialTick: 0 }
+
 /** Runs the port on every sample; returns the differences, at most a few per model. */
 export function checkSampled(version: string, sampled: Sampled, limit = 6): string[] {
   const store = getEntityModelsStore(version)!
@@ -65,7 +70,7 @@ export function checkSampled(version: string, sampled: Sampled, limit = 6): stri
       part.skipDraw = skipped.has(part.path)
     }
     try {
-      model.setupAnim(floatState({ ...sampled.base, ...sample.in, dataNames: sampled.dataNames ?? {} }))
+      model.setupAnim(floatState({ ...SETUP_ARGUMENTS, ...sampled.base, ...sample.in, dataNames: sampled.dataNames ?? {}, entityClass: sampled.entityClass }))
     } catch (err) {
       problems.push(`sample ${index} ${JSON.stringify(sample.in)}: ${(err as Error).stack}`)
       if (problems.length >= limit) break

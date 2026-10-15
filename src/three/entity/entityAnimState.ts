@@ -354,3 +354,84 @@ export function entityAnimState(tracker: EntityAnimTracker, input: EntityAnimInp
 }
 
 export const TICK_SECONDS = TICK_MS / 1000
+
+// ---- before render states ------------------------------------------------------------------------------------------
+
+/**
+ * Per entity: what its model reads of the entity before render states (1.21.1 and older): its client side fields
+ * (entity.<field>, the version's names: Mojang names from 1.14.4, legacy Yarn names before), model fields its renderer
+ * sets (model.<field>), and the age its renderer passes (a chicken's flapping, a squid's tentacles: getBob).
+ */
+export type EntityEraAdapter = (state: AnimState, tracker: EntityAnimTracker, input: EntityAnimInput, renderState: AnimState) => void
+
+export const ENTITY_ERA_ADAPTERS: Record<string, EntityEraAdapter> = {}
+
+export const registerEntityEraAdapters = (adapters: Record<string, EntityEraAdapter>) => Object.assign(ENTITY_ERA_ADAPTERS, adapters)
+
+/** A synched data value as the game's field holds it: a pose by name. */
+const javaDataValue = (value: unknown, name: string | undefined, version: string) => {
+  if (name === 'pose' && typeof value === 'number') {
+    const names = ['STANDING', 'FALL_FLYING', 'SLEEPING', 'SWIMMING', 'SPIN_ATTACK', 'CROUCHING', 'LONG_JUMPING', 'DYING', 'CROAKING', 'USING_TONGUE']
+    if (versionAtLeast(version, '1.19.3')) names.push('SITTING')
+    names.push('ROARING', 'SNIFFING', 'EMERGING', 'DIGGING')
+    if (versionAtLeast(version, '1.20.3')) names.push('SLIDING', 'SHOOTING', 'INHALING')
+    return names[value] ?? 'STANDING'
+  }
+  if (typeof value === 'bigint') return Number(value)
+  return value
+}
+
+/**
+ * The state models read before render states: the walk, age, head angles and partial tick as setupAnim's arguments,
+ * the model fields LivingEntityRenderer sets (attackTime / handSwingProgress, riding, young / child) and humanoid
+ * renderers set (crouching / sneaking), the synched data by index (with the export's names), the items in hand, the
+ * client side fields every living entity has (swim amount, rotations, ticks, motion), then the entity's own adapter.
+ */
+export function entityEraState(tracker: EntityAnimTracker, input: EntityAnimInput, dataNames: Record<string, string> = {}, renderState = entityAnimState(tracker, input)): AnimState {
+  const pt = tracker.partialTick
+  const crouching = renderState.isCrouching || bit(sharedFlags(input), 2)
+  const velocity = input.velocity ?? { x: 0, y: 0, z: 0 }
+  const toDegrees = (yaw: number) => f(wrapDegrees(f(180 - yaw * RAD_TO_DEG)))
+  const state: AnimState = {
+    walkAnimationPos: renderState.walkAnimationPos,
+    walkAnimationSpeed: renderState.walkAnimationSpeed,
+    ageInTicks: renderState.ageInTicks,
+    yRot: renderState.yRot,
+    xRot: renderState.xRot,
+    partialTick: pt,
+    dataNames,
+    'model.attackTime': renderState.swingAnimation,
+    'model.handSwingProgress': renderState.swingAnimation,
+    'model.riding': renderState.isPassenger,
+    'model.young': renderState.isBaby,
+    'model.child': renderState.isBaby,
+    'model.crouching': crouching,
+    'model.sneaking': crouching,
+    'model.swimAmount': renderState.swimAmount,
+    'model.leftArmPose': 'EMPTY',
+    'model.rightArmPose': 'EMPTY',
+    'item.mainhand': input.equipment?.mainhand ?? null,
+    'item.offhand': input.equipment?.offhand ?? null,
+    'entity.swimAmount': tracker.swimAmount,
+    'entity.swimAmountO': tracker.swimAmountO,
+    'entity.tickCount': tracker.tickCount,
+    'entity.ticksAlive': tracker.tickCount,
+    'entity.age': tracker.tickCount,
+    'entity.onGround': input.onGround ?? false,
+    'entity.deltaMovement': [velocity.x, velocity.y, velocity.z],
+    'entity.xRot': renderState.xRot,
+    'entity.xRotO': renderState.xRot,
+    'entity.yHeadRot': toDegrees(input.headYaw),
+    'entity.yHeadRotO': toDegrees(input.headYaw),
+    'entity.yBodyRot': toDegrees(input.bodyYaw),
+    'entity.yBodyRotO': toDegrees(input.bodyYaw),
+    'entity.id': input.entityId ?? 0,
+    'entity.wasTouchingWater': input.isInWater ?? false,
+    'entity.isInWater': input.isInWater ?? false,
+    // the entity's class (illagers pose by it): Mojang names from 1.14, legacy Yarn names (…Entity) before
+    entityClass: input.name.replace(/(^|_)([a-z])/g, (_, __, c: string) => c.toUpperCase()) + (versionAtLeast(input.version, '1.14') ? '' : 'Entity')
+  }
+  for (const [index, value] of Object.entries(input.data)) state[`data.${index}`] = javaDataValue(value, dataNames[index], input.version)
+  ENTITY_ERA_ADAPTERS[input.name]?.(state, tracker, input, renderState)
+  return state
+}

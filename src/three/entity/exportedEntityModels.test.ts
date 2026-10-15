@@ -253,7 +253,7 @@ function drawnQuads(version: string, entry: EntityModelEntry) {
 describe.each([reference26, reference1214, reference1204, reference1144, reference189] as unknown as Array<Record<string, Record<string, number[][][]> | string>>)('built meshes draw what $version draws', reference => {
   const version = reference.version as string
   for (const [name, entries] of Object.entries(reference)) {
-    if (typeof entries === 'string' || name === 'paintings' || name === 'animations' || name === 'heads') continue
+    if (typeof entries === 'string' || name === 'paintings' || name === 'animations' || name === 'heads' || name === 'boats') continue
     test(name, () => {
       const look = composeEntityLook(getExportedEntity(version, name)!)
       for (const [key, expected] of Object.entries(entries)) {

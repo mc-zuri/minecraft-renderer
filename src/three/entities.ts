@@ -13,7 +13,7 @@ import { Team } from 'mineflayer'
 import PrismarineChatLoader from 'prismarine-chat'
 import { loadSkinFromUsername, loadSkinImage, stevePngUrl } from '../lib/utils/skins'
 import { renderComponent } from '../sign-renderer'
-import { createCanvas } from '../lib/utils'
+import { createCanvas, versionToNumber } from '../lib/utils'
 import { configurePlayerSkinMaterials, PlayerObjectType } from '../lib/createPlayerObject'
 import { getBlockMeshFromModel } from './holdingBlock'
 import { createItemMesh } from './itemMesh'
@@ -91,7 +91,7 @@ import { composeEntityLook } from 'mc-assets/dist/entityModels'
 import { disposeObject, loadNearestFilterTexture, loadTexture, loadThreeJsTextureFromUrl } from './threeJsUtils'
 import { armorModel, armorTextures, elytraTexture } from './entity/armorModels'
 import { ExportedEntityAnimator, applyAnimationOffsets, poseName } from './entity/exportedAnimations'
-import { EntityAnimTracker, entityAnimState, type EntityAnimInput } from './entity/entityAnimState'
+import { EntityAnimTracker, entityAnimState, entityEraState, type EntityAnimInput } from './entity/entityAnimState'
 import './entity/drivers'
 import { animContext } from './entity/setupAnim'
 import { WorldRendererThree } from './worldRendererThree'
@@ -407,6 +407,12 @@ function getEntityMesh(
         addNametag(entity, options, e.mesh, world.version)
         return e.mesh
       }
+      // no older model either: nothing until the export loads, then built again
+      if (entityExportVersionFor(world.version, entityName) && !getEntityModelsStoreFor(world.version, entityName)) {
+        const pending = new THREE.Group()
+        pending.userData[AWAITING_EXPORT_USER_DATA_KEY] = true
+        return pending
+      }
     } catch (err) {
       reportError?.(err)
     }
@@ -436,6 +442,9 @@ function getEntityMesh(
 const AWAITING_EXPORT_USER_DATA_KEY = '_awaitingExportedEntityModels'
 /** The overrides an entity was last updated with, to build it again. */
 const LAST_OVERRIDES_USER_DATA_KEY = '_lastEntityOverrides'
+
+/** The synched data names the export gives an entity (1.14+), by index. */
+const exportedDataNames = (version: string, name: string) => (getExportedEntity(version, name) as { dataNames?: Record<string, string> } | undefined)?.dataNames ?? {}
 
 /** The max_health attribute of a prismarine entity, when the server sent it. */
 const maxHealthOf = (entity: unknown) => {
@@ -724,7 +733,10 @@ export class Entities {
         animTracker.setInput(animInput)
         animTracker.advance(Math.min((now - last) / 1000, 1))
         const animState = entityAnimState(animTracker, animInput)
-        applyExportedSetupAnim(exportedRig, animState)
+        // models before render states (1.21.1 and older exports) read the entity: their own state
+        const exportVersion = entityExportVersionFor(this.worldRenderer.version, exportedRig.name) ?? this.worldRenderer.version
+        const modelState = versionToNumber(exportVersion) < versionToNumber('1.21.2') ? entityEraState(animTracker, animInput, exportedDataNames(this.worldRenderer.version, exportedRig.name), animState) : animState
+        applyExportedSetupAnim(exportedRig, modelState)
         if (isBoatEntityName(animInput.name)) applyBoatRock(exportedRig, animState, animContext(this.worldRenderer.version).sin)
       } else if (exportedRig && exportedWalk && exportedRig.name !== 'armor_stand') {
         const walk = updateHorseHeadAnimationFrame(exportedWalk, dt)
@@ -1195,6 +1207,8 @@ export class Entities {
   }
 
   playAnimation(entityPlayerId, animation: 'walking' | 'running' | 'oneSwing' | 'idle' | 'crouch' | 'crouchWalking' | 'riding') {
+    // a main hand swing (the animate packet's 0): exported models swing their arms from it too
+    if (animation === 'oneSwing' && entityPlayerId !== 'player_entity') this.handleEntitySwing(entityPlayerId, 0)
     const playerObject =
       entityPlayerId === 'player_entity' ? this.playerEntity?.playerObject : (this.getPlayerObject(entityPlayerId) ?? this.playerEntity?.playerObject)
 
@@ -1408,7 +1422,10 @@ export class Entities {
       bodyYaw: previous?.bodyYaw ?? (entity.yaw || 0),
       headYaw: previous?.headYaw ?? ((entity as { headYaw?: number }).headYaw ?? entity.yaw ?? 0),
       pitch: previous?.pitch ?? (entity.pitch || 0),
-      position: previous?.position,
+      position: previous?.position ?? (() => {
+        const position = entity.position ?? (entity as { pos?: { x: number; y: number; z: number } }).pos
+        return position ? { x: position.x, y: position.y, z: position.z } : undefined
+      })(),
       onGround: (entity as { onGround?: boolean }).onGround,
       isPassenger: !!(entity as { vehicle?: unknown }).vehicle || e.userData._passengerVehicleId != null || e.userData._boatPassengerVehicleId != null,
       equipment,
@@ -1960,14 +1977,17 @@ export class Entities {
       if (!headRotationOnly && entity.position && Number.isFinite(entity.position.x) && Number.isFinite(entity.position.z)) {
         setHorseHeadAnimationPosition(e.userData[EXPORTED_WALK_USER_DATA_KEY], entity.position)
       }
-      const animInput = e.userData[ANIM_INPUT_USER_DATA_KEY] as EntityAnimInput | undefined
-      if (animInput) {
-        animInput.bodyYaw = e.userData._exportedBodyYaw
-        animInput.headYaw = e.userData._exportedHeadYaw
-        animInput.pitch = e.userData._exportedPitch
-        if (!headRotationOnly && entity.position && Number.isFinite(entity.position.x)) animInput.position = { x: entity.position.x, y: entity.position.y, z: entity.position.z }
-        animInput.onGround = (entity as { onGround?: boolean }).onGround
-      }
+    }
+    // what the exported entity's client ticking reads: rotations, position, ground
+    const animInput = e.userData[ANIM_INPUT_USER_DATA_KEY] as EntityAnimInput | undefined
+    if (animInput) {
+      const finite = (value: unknown, fallback: number) => (typeof value === 'number' && Number.isFinite(value) ? value : fallback)
+      animInput.bodyYaw = finite(entity.yaw, animInput.bodyYaw)
+      animInput.headYaw = finite((entity as { headYaw?: number }).headYaw, animInput.bodyYaw)
+      animInput.pitch = finite(entity.pitch, animInput.pitch)
+      const position = entity.position ?? (entity as { pos?: { x: number; y: number; z: number } }).pos
+      if (!headRotationOnly && position && Number.isFinite(position.x)) animInput.position = { x: position.x, y: position.y, z: position.z }
+      animInput.onGround = (entity as { onGround?: boolean }).onGround
     }
     const cameraSynced = usesCameraSyncedVehiclePosition(entity)
     if (entity.position) {
