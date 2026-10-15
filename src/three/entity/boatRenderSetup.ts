@@ -203,11 +203,13 @@ export function setupBoatMesh(root: THREE.Object3D): { waterPatch: THREE.Mesh } 
 }
 
 export function disposeBoatWaterPatch(root: THREE.Object3D): void {
-  const patch = root.userData.boatWaterPatch as THREE.Mesh | undefined
+  const patch = root.userData.boatWaterPatch as THREE.Object3D | undefined
   if (!patch) return
-  patch.geometry.dispose()
-  if (patch.material instanceof THREE.Material) {
-    patch.material.dispose()
-  }
+  // a mesh (the OBJ boats') or the export's patch holder with its meshes
+  patch.traverse(child => {
+    if (!(child instanceof THREE.Mesh)) return
+    child.geometry.dispose()
+    if (child.material instanceof THREE.Material) child.material.dispose()
+  })
   delete root.userData.boatWaterPatch
 }

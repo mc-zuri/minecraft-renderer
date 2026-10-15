@@ -7,6 +7,7 @@ import { applyBoatRock, applyExportedSetupAnim, buildExportedEntity, loadEntityM
 import { animContext, floatState } from './setupAnim'
 import { EntityAnimTracker, entityAnimState, registerEntityDrivers } from './entityAnimState'
 import { BOATS_DRIVERS } from './drivers/boats'
+import { disposeBoatWaterPatch } from './boatRenderSetup'
 import reference26 from './fixtures/entityReferenceQuads-26.3.json'
 import reference1204 from './fixtures/entityReferenceQuads-1.20.4.json'
 
@@ -147,6 +148,13 @@ describe('what drives a boat', () => {
     tracker.setInput(input(false, false))
     tracker.tick()
     expect(entityAnimState(tracker, input(false, false)).rowingTimeLeft).toBe(0)
+  })
+
+  test("an exported boat's water patch (a holder of meshes) is disposed when the boat is rebuilt", () => {
+    const build = buildExportedEntity('26.3', 'oak_boat')!
+    expect(build.object.userData.boatWaterPatch).toBeTruthy()
+    expect(() => disposeBoatWaterPatch(build.object)).not.toThrow()
+    expect(build.object.userData.boatWaterPatch).toBeUndefined()
   })
 
   test('a boat of a wood the driver list does not name (26.3 poplar) drives and poses as every boat', () => {
