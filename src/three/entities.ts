@@ -71,6 +71,9 @@ import {
   setSkinUrlResolver,
   updateExportedHeadAnchor,
   applyExportedSetupAnim,
+  applyBoatRock,
+  buildHumanoidHeadItem,
+  SKINVIEW_HEAD_FRAME,
   headItemDisplayTransform,
   resetExportedPose,
   PAINTING_SIGNATURE_USER_DATA_KEY,
@@ -90,6 +93,7 @@ import { armorModel, armorTextures, elytraTexture } from './entity/armorModels'
 import { ExportedEntityAnimator, applyAnimationOffsets, poseName } from './entity/exportedAnimations'
 import { EntityAnimTracker, entityAnimState, type EntityAnimInput } from './entity/entityAnimState'
 import './entity/drivers'
+import { animContext } from './entity/setupAnim'
 import { WorldRendererThree } from './worldRendererThree'
 import { IndexedData } from 'minecraft-data'
 import { ItemSpecificContextProperties } from '../playerState/types'
@@ -712,14 +716,16 @@ export class Entities {
       const exportedWalk = entity.userData[EXPORTED_WALK_USER_DATA_KEY] as HorseHeadAnimationState | undefined
       const animTracker = entity.userData[ANIM_TRACKER_USER_DATA_KEY] as EntityAnimTracker | undefined
       const animInput = entity.userData[ANIM_INPUT_USER_DATA_KEY] as EntityAnimInput | undefined
-      if (exportedRig?.anims.length && animTracker && animInput) {
+      if (exportedRig && (exportedRig.anims.length || isBoatEntityName(exportedRig.name)) && animTracker && animInput) {
         // the models' own animation code, from the render state the game would extract
         const now = performance.now()
         const last = (entity.userData._animLastFrame as number | undefined) ?? now
         entity.userData._animLastFrame = now
         animTracker.setInput(animInput)
         animTracker.advance(Math.min((now - last) / 1000, 1))
-        applyExportedSetupAnim(exportedRig, entityAnimState(animTracker, animInput))
+        const animState = entityAnimState(animTracker, animInput)
+        applyExportedSetupAnim(exportedRig, animState)
+        if (isBoatEntityName(animInput.name)) applyBoatRock(exportedRig, animState, animContext(this.worldRenderer.version).sin)
       } else if (exportedRig && exportedWalk && exportedRig.name !== 'armor_stand') {
         const walk = updateHorseHeadAnimationFrame(exportedWalk, dt)
         const angles = prismarineToGameHeadAngles(entity.userData._exportedBodyYaw ?? 0, entity.userData._exportedHeadYaw ?? entity.userData._exportedBodyYaw ?? 0, entity.userData._exportedPitch ?? 0)
@@ -1321,6 +1327,37 @@ export class Entities {
     if (animation === 0 || animation === 3) tracker?.swingArm(animation === 0 ? 'MAIN_HAND' : 'OFF_HAND')
   }
 
+  /** The head item a player model wears that the head layer draws (a skull, a block), if any. */
+  private playerHeadItemInput(entity: SceneEntity['originalEntity']) {
+    const input = lookInputFromEntity(entity as never).head
+    if (!input) return undefined
+    return buildHumanoidHeadItem(this.worldRenderer.version, input) ? input : undefined
+  }
+
+  /** Builds (again when the item changes) the head item of a player model on skinview3d's head. */
+  private updatePlayerHeadItem(entityMesh: SceneEntity, entity: SceneEntity['originalEntity']) {
+    const head = entityMesh.playerObject!.skin.head as THREE.Object3D
+    const input = lookInputFromEntity(entity as never).head
+    const signature = JSON.stringify(input ?? null)
+    if (head.userData._headItemSignature === signature) return
+    head.userData._headItemSignature = signature
+    const previous = head.children.find(child => child.name === 'player_head_item')
+    if (previous) {
+      head.remove(previous)
+      disposeObject(previous)
+    }
+    if (!input) return
+    const built = buildHumanoidHeadItem(this.worldRenderer.version, input)
+    if (!built) return
+    const frame = new THREE.Group()
+    frame.name = 'player_head_item'
+    frame.matrixAutoUpdate = false
+    frame.matrix.copy(SKINVIEW_HEAD_FRAME)
+    frame.add(built.group)
+    head.add(frame)
+    if (built.headItem) this.attachHeadItem(built.headItem)
+  }
+
   /** The level's game time (world age, ticks) the client last got: entities' animations that count from it read it. */
   gameTime?: { age: number; at: number }
 
@@ -1588,7 +1625,8 @@ export class Entities {
       this.attachExportedExtras(mesh)
       if (mesh.userData[EXPORTED_ENTITY_USER_DATA_KEY]) group.userData[EXPORTED_WALK_USER_DATA_KEY] = createHorseHeadAnimationState()
       const boatMeshYawOffset = getBoatMeshYawOffset(entity.name)
-      if (boatMeshYawOffset != null) {
+      // the OBJ boat (no export for the version yet) faces -X and has rigs of its own; an exported boat faces north
+      if (boatMeshYawOffset != null && !mesh.userData[EXPORTED_ENTITY_USER_DATA_KEY]) {
         mesh.rotation.y = boatMeshYawOffset
         setupBoatMesh(mesh)
       }
@@ -2266,8 +2304,13 @@ export class Entities {
       addArmorModel(this.worldRenderer, entityMesh, 'feet', entity.equipment[2])
       addArmorModel(this.worldRenderer, entityMesh, 'legs', entity.equipment[3], 2)
       addArmorModel(this.worldRenderer, entityMesh, 'chest', entity.equipment[4])
-      addArmorModel(this.worldRenderer, entityMesh, 'head', entity.equipment[5])
+      // a skull or block on the head is the head layer's (updatePlayerHeadItem), not armor
+      if (!entityMesh.playerObject || !this.playerHeadItemInput(entity)) addArmorModel(this.worldRenderer, entityMesh, 'head', entity.equipment[5])
+      else removeArmorModel(entityMesh, 'head')
     }
+
+    // a skull or block worn on a player's (or mannequin's) head, drawn as the head layer draws it
+    if (entityMesh.playerObject) this.updatePlayerHeadItem(entityMesh, entity)
 
     // Update player-specific equipment
     if (isPlayer && entityMesh.playerObject) {

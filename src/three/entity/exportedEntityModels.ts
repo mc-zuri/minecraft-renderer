@@ -32,6 +32,7 @@ import {
 import { createCanvas } from '../../lib/utils'
 import { loadThreeJsTextureFromUrlSync } from '../threeJsUtils'
 import { AnimModel, ModelPose, animContext, animModelsFor, type AnimState, type PartPose } from './setupAnim'
+import { BOAT_WATER_PATCH_NAME, BOAT_WATER_PATCH_RENDER_ORDER, createBoatWaterPatchMaterial } from './boatRenderSetup'
 
 /**
  * Entity models exported from the game (mc-assets' dist/entityModels.json, made by minecraft-model-generator): the
@@ -499,6 +500,8 @@ export type ExportedEntityRig = {
    * every frame, and the parts' bones follow.
    */
   anims: ExportedAnim[]
+  /** every model entry's group and the entry's transform (a boat's rocking turns them every frame) */
+  holders: Array<{ holder: THREE.Group; transform: number[] }>
 }
 
 /** A drawn model and its ported setupAnim, with the bones of every entry drawing its parts. */
@@ -698,16 +701,30 @@ export function buildExportedEntity(version: string, name: string, input: Export
   if (!look.length) return undefined
   const object = new THREE.Group()
   object.name = `exported_entity_${name}`
-  const rig: ExportedEntityRig = { name, signature: lookSignature(look, input.head), parts: new Map(), armor: !!entity.armor, bones: new Map(), anims: [] }
+  const rig: ExportedEntityRig = { name, signature: lookSignature(look, input.head), parts: new Map(), armor: !!entity.armor, bones: new Map(), anims: [], holders: [] }
   const result: ExportedEntityBuild = { object, rig, blocks: [], items: [], custom: [] }
   const context = animContext(version, animation => store.getAnimation(version, animation))
   for (const { entry } of look) {
     if (entry.type === 'model') {
-      if (entry.renderType === 'water_mask') continue // the boat's water patch: the renderer masks water itself
       const layer = store.getModel(version, entry.model)
       if (!layer) continue
       const entryParts = new Map<string, ExportedPart>()
-      object.add(buildModelEntry(entry, layer, rig.parts, version, rig.bones, entryParts))
+      const holder = buildModelEntry(entry, layer, rig.parts, version, rig.bones, entryParts)
+      object.add(holder)
+      rig.holders.push({ holder, transform: entry.transform })
+      if (entry.renderType === 'water_mask') {
+        // the boat's water patch (RenderTypes.waterMask): depth only, drawn before the water so none shows inside
+        holder.name = BOAT_WATER_PATCH_NAME
+        holder.visible = false
+        holder.traverse(child => {
+          if (!(child instanceof THREE.Mesh)) return
+          ;(child.material as THREE.Material).dispose()
+          child.material = createBoatWaterPatchMaterial()
+          child.renderOrder = BOAT_WATER_PATCH_RENDER_ORDER
+        })
+        object.userData.boatWaterPatch = holder
+        continue
+      }
       linkExportedAnim(rig, entry, layer, entryParts, context, entityExportVersionFor(version, name) ?? version)
     } else if (entry.type === 'block') {
       result.blocks.push(entry)
@@ -802,6 +819,64 @@ export function applyExportedSetupAnim(rig: ExportedEntityRig, state: AnimState)
   }
 }
 
+/**
+ * BoatRenderer's rocking, right after it turns the boat by its yaw: the hurt wobble about x (Mth.sin(hurt) * hurt *
+ * damage / 10 * hurtDir degrees) and a bubble column's rocking about (1, 0, 1) — a quaternion JOML is given an axis that
+ * is not unit length, made into a matrix as JOML makes it, so its slight scaling is the game's too. The export's
+ * transforms are the boat facing north (yaw 180: no turn), so the rocking goes between their translation and the rest.
+ */
+export function boatRockMatrix(state: AnimState, sin: (x: number) => number, out = new THREE.Matrix4()) {
+  out.identity()
+  const f = Math.fround
+  const hurt = state.hurtTime as number
+  if (hurt > 0) {
+    const degrees = f(f(f(f(f(sin(hurt) * hurt) * (state.damageTime as number)) / 10) * (state.hurtDir as number)))
+    out.multiply(new THREE.Matrix4().makeRotationX(f(degrees * f(Math.PI / 180))))
+  }
+  const bubble = state.bubbleAngle as number
+  if (!state.isUnderWater && Math.abs(bubble) >= 1e-5) {
+    // Quaternionf.setAngleAxis(angle, 1, 0, 1) without normalizing, then Matrix4f.rotate
+    const half = f(f(bubble * f(Math.PI / 180)) * 0.5)
+    const s = f(Math.sin(half))
+    const x = s
+    const z = s
+    // org.joml.Math.cosFromSin: the root of 1 - sin², negative past a half turn (never for these angles)
+    const w = f(Math.sqrt(f(1 - f(s * s))))
+    const [w2, x2, z2] = [f(w * w), f(x * x), f(z * z)]
+    const [xz, zw, yw, xw] = [f(x * z), f(z * w), 0, f(x * w)]
+    // rotation matrix of JOML from (x, 0, z, w): column major
+    out.multiply(
+      new THREE.Matrix4().set(
+        f(f(w2 + x2) - z2), f(-zw - zw), f(f(xz + yw) + f(xz + yw)), 0,
+        f(zw + zw), f(f(-z2 + w2) - x2), f(-xw - xw), 0,
+        f(f(xz - yw) + f(xz - yw)), f(xw + xw), f(f(z2 - x2) + w2), 0,
+        0, 0, 0, 1
+      )
+    )
+  }
+  return out
+}
+
+const rockScratch = new THREE.Matrix4()
+const translationScratch = new THREE.Matrix4()
+const entryScratch = new THREE.Matrix4()
+
+/** Rocks a boat's entries: translation, rocking, back, then the export's transform (and the 1/16 of model pixels). */
+export function applyBoatRock(rig: ExportedEntityRig, state: AnimState, sin: (x: number) => number) {
+  const rock = boatRockMatrix(state, sin, rockScratch)
+  for (const { holder, transform } of rig.holders) {
+    entryScratch.fromArray(transform)
+    translationScratch.makeTranslation(transform[12]!, transform[13]!, transform[14]!)
+    holder.matrix
+      .copy(translationScratch)
+      .multiply(rock)
+      .multiply(translationScratch.invert())
+      .multiply(entryScratch)
+      .multiply(new THREE.Matrix4().makeScale(1 / 16, 1 / 16, 1 / 16))
+    holder.matrixWorldNeedsUpdate = true
+  }
+}
+
 /** Does every drawn model of the rig have its animation ported (the generic head look and limb swing are then not needed). */
 export const exportedRigAnimated = (rig: ExportedEntityRig) => rig.anims.length > 0
 
@@ -827,6 +902,48 @@ export function updateExportedHeadAnchor(rig: ExportedEntityRig) {
   }
   group.matrixWorldNeedsUpdate = true
 }
+
+// ---- head items on players -----------------------------------------------------------------------------------------
+
+/**
+ * The skull or item a player (or mannequin) wears on its head, as CustomHeadLayer draws it on the player model: the head
+ * layer of a humanoid of the export (the zombie's: HumanoidModel's head, the same part and layer settings as the
+ * player's), relative to the head part's frame. `group` is in that frame (the game's model axes, blocks): a player model
+ * drawn otherwise (skinview3d: pixels, y up, facing +z) takes it with {@link SKINVIEW_HEAD_FRAME}. Undefined when the
+ * item is head armor (drawn as armor) or draws nothing on the head.
+ */
+export function buildHumanoidHeadItem(version: string, head: HeadItemInput): { group: THREE.Group; headItem?: { holder: THREE.Group; item: HeadItemInput } } | undefined {
+  const humanoid = getExportedEntity(version, 'zombie')
+  const store = getEntityModelsStoreFor(version, 'zombie')
+  if (!humanoid || !store) return undefined
+  const draw = composeEntityHead(humanoid, {}, head, head.isBlock ?? true)
+  if (!draw) return undefined
+  const group = new THREE.Group()
+  group.name = 'humanoid_head_item'
+  for (const { entry } of draw.entries ?? []) {
+    const layer = store.getModel(version, entry.model)
+    if (!layer) continue
+    const textured = head.skin && entry.model.includes('player_head') ? { ...entry, texture: head.skin } : entry
+    group.add(buildModelEntry(textured, layer, new Map(), version))
+  }
+  let headItem: { holder: THREE.Group; item: HeadItemInput } | undefined
+  if (draw.item) {
+    const holder = new THREE.Group()
+    holder.name = 'exported_head_item_pose'
+    holder.matrixAutoUpdate = false
+    holder.matrix.fromArray(draw.item.transform)
+    group.add(holder)
+    headItem = { holder, item: head }
+  }
+  if (!group.children.length) return undefined
+  return { group, headItem }
+}
+
+/**
+ * The game's head part frame (model axes: x as drawn, y down, z back; blocks) in skinview3d's head (pixels, y up, the face
+ * toward +z, turned half around by its wrapper): x stays, y and z flip, 16 pixels a block.
+ */
+export const SKINVIEW_HEAD_FRAME = new THREE.Matrix4().makeScale(16, -16, -16)
 
 // ---- paintings -----------------------------------------------------------------------------------------------------
 

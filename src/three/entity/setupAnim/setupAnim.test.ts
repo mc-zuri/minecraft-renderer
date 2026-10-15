@@ -81,7 +81,8 @@ export function checkSampled(version: string, sampled: Sampled, limit = 6): stri
           : moved
         : [0, 1, 2, 3, 4, 5].map(i => part.initial[i] ?? 0).concat([0, 1, 2].map(i => part.initialScale[i] ?? 1))
       const actual = [...part.pose, ...part.scale]
-      if (want.some((value, i) => Math.abs(value - actual[i]!) > 1e-5 + 1e-6 * Math.abs(value))) {
+      // NaN never passes
+      if (want.some((value, i) => !(Math.abs(value - actual[i]!) <= 1e-5 + 1e-6 * Math.abs(value)))) {
         wrong.push(`${part.path || '<root>'}: ${actual.map(v => +v.toFixed(6)).join(', ')} vs game ${want.join(', ')}`)
       }
       const visible = sample.out.hidden?.includes(part.path) ? false : sample.out.shown?.includes(part.path) ? true : !hidden.has(part.path)

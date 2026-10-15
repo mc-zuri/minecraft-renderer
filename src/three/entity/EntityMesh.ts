@@ -14,7 +14,6 @@ import { externalModels } from './objModels'
 import externalTexturesJson from './externalTextures.json'
 import { createAnimatedObject } from './gltfAnimationUtils'
 import { BOAT_OBJ_OFFSET_Y } from './boatRenderSetup'
-import { isBoatEntityName } from './boatModelRotation'
 import { VANILLA_117_HORSE_ENTITY_SCALES } from './horseEntityScale'
 import { createHorseHeadRig } from './horseHeadAnimation'
 import { buildExportedEntity, getEntityModelsStoreFor, getExportedEntity, type ExportedEntityBuild } from './exportedEntityModels'
@@ -606,10 +605,9 @@ export class EntityMesh {
       return
     }
 
-    // models exported from the game for this version, drawn for the entity's metadata and equipment; boats keep the OBJ
-    // model their paddle, water patch and passenger rigs are made for
-    const exported =
-      rendererSpecialHandled.includes(originalType) || isBoatEntityName(originalType) ? undefined : buildExportedEntity(version, originalType, overrides.lookInput)
+    // models exported from the game for this version, drawn for the entity's metadata and equipment (boats too: their
+    // paddles, rocking and water patch come from the export and BoatRenderer's code)
+    const exported = rendererSpecialHandled.includes(originalType) ? undefined : buildExportedEntity(version, originalType, overrides.lookInput)
     if (exported) {
       this.mesh = exported.object
       this.exported = exported
