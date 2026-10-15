@@ -36,11 +36,15 @@ const versionToNumber = (version: string) => {
   return +`${x.padStart(2, '0')}${y.padStart(2, '0')}${z.padStart(2, '0')}`
 }
 
-/** Versions the exports cover: from the oldest exported version on (older ones keep the renderer's own models). */
+/**
+ * Versions the exports cover: from the major version of the oldest export on (1.17 when the oldest is 1.17.1; older
+ * versions keep the renderer's own models). A version between two exports uses the older one.
+ */
 export const isEntityModelsVersionCovered = (version: string) => {
   const versions = getEntityModelsStore().versions
   if (!versions.length || !version) return false
-  return versionToNumber(version) >= versionToNumber(versions[0])
+  const [major, minor] = versions[0].split('.')
+  return versionToNumber(version) >= versionToNumber(minor === undefined ? major : `${major}.${minor}`)
 }
 
 export const getExportedEntity = (version: string, name: string): EntityDefinition | undefined => {

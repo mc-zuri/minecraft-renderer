@@ -132,7 +132,8 @@ describe('exported entity models', () => {
   test('versions before the oldest export keep the older models', () => {
     expect(isEntityModelsVersionCovered(VERSION)).toBe(true)
     expect(getEntityModelsStore().versions[0]).toBeTruthy()
-    expect(isEntityModelsVersionCovered('1.8.8')).toBe(getEntityModelsStore().versions[0] === '1.8.8')
+    expect(isEntityModelsVersionCovered('1.8.8')).toBe(getEntityModelsStore().versions[0].startsWith('1.8'))
+    expect(isEntityModelsVersionCovered('1.17')).toBe(true)
   })
 })
 
