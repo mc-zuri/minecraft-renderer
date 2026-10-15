@@ -1,9 +1,18 @@
+import fs from 'fs'
+import path from 'path'
 import { createRequire } from 'module'
-import { describe, expect, test } from 'vitest'
-import { BLOCK_ENTITIES, THROWN_ITEMS, fallingBlockState, thrownItemOf } from './thrownItems'
-import { entityModelName } from './exportedEntityModels'
+import { beforeAll, describe, expect, test, vi } from 'vitest'
+import { BLOCK_ENTITIES, THROWN_ITEMS, exportedItemEntity, fallingBlockState, thrownItemOf } from './thrownItems'
+import { entityModelName, entityModelsVersions, loadEntityModels, resolveExportedEntityName, setEntityModelsSource } from './exportedEntityModels'
+
+vi.mock('../threeJsUtils', () => ({ loadThreeJsTextureFromUrlSync: () => ({ promise: new Promise(() => {}) }) }))
 
 const require = createRequire(import.meta.url)
+const mcAssetsDist = path.dirname(require.resolve('mc-assets/dist/entityModels.json'))
+setEntityModelsSource({ load: async exportVersion => JSON.parse(fs.readFileSync(path.join(mcAssetsDist, 'entityModels', `${exportVersion}.json`), 'utf8')) })
+beforeAll(async () => {
+  for (const version of entityModelsVersions()) await loadEntityModels(version)
+})
 const versionNumber = (version: string) => {
   const [x, y = '0', z = '0'] = version.split('.')
   return +`${x.padStart(2, '0')}${y.padStart(2, '0')}${z.padStart(2, '0')}`
@@ -30,10 +39,10 @@ describe('item-like entities', () => {
 
   test("1.8's names and items: ThrownEgg an egg, FireworksRocketEntity the fireworks item, a fireball 3 times a fire charge", () => {
     const items = require('minecraft-data')('1.8.8').itemsByName
-    expect(thrownItemOf(entityModelName('ThrownEgg'), items)).toEqual({ item: 'egg', scale: 1 })
-    expect(thrownItemOf(entityModelName('FireworksRocketEntity'), items)).toEqual({ item: 'fireworks', scale: 1 })
-    expect(thrownItemOf(entityModelName('Fireball'), items)).toEqual({ item: 'fire_charge', scale: 3 })
-    expect(thrownItemOf(entityModelName('ThrownPotion'), items)).toEqual({ item: 'potion', scale: 1 })
+    expect(thrownItemOf(entityModelName('ThrownEgg'), items)).toEqual({ item: 'egg', scale: 1, lift: 0.125 })
+    expect(thrownItemOf(entityModelName('FireworksRocketEntity'), items)).toEqual({ item: 'fireworks', scale: 1, lift: 0.125 })
+    expect(thrownItemOf(entityModelName('Fireball'), items)).toEqual({ item: 'fire_charge', scale: 3, lift: 0.375 })
+    expect(thrownItemOf(entityModelName('ThrownPotion'), items)).toEqual({ item: 'potion', scale: 1, lift: 0.125 })
   })
 })
 
@@ -48,5 +57,16 @@ describe('block entities', () => {
     expect(fallingBlockState(12 | (1 << 12), '1.12.2')).toEqual({ blockState: (12 << 4) | 1 })
     expect(fallingBlockState(66, '1.20.4')).toEqual({ blockState: 66 })
     expect(fallingBlockState(0, '1.20.4')).toBeUndefined()
+  })
+})
+
+describe('exported item entities', () => {
+  test.each(entityModelsVersions())("%s: the renderer's scale, the ground display transform taken out (the export's pose goes into it from 1.21.9)", version => {
+    const expected: Record<string, number> = { snowball: 1, fireball: 3, small_fireball: 0.75, eye_of_ender: 1 }
+    for (const [name, scale] of Object.entries(expected)) {
+      const exported = exportedItemEntity(version, resolveExportedEntityName(version, name))
+      if (!exported) continue
+      expect(exported.scale, `${version} ${name}`).toBeCloseTo(scale, 5)
+    }
   })
 })

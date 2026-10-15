@@ -92,7 +92,7 @@ import { disposeObject, loadNearestFilterTexture, loadTexture, loadThreeJsTextur
 import { armorModel, armorTextures, elytraTexture } from './entity/armorModels'
 import { ExportedEntityAnimator, applyAnimationOffsets, poseName } from './entity/exportedAnimations'
 import { EntityAnimTracker, entityAnimState, entityEraState, type EntityAnimInput } from './entity/entityAnimState'
-import { BLOCK_ENTITIES, fallingBlockState, thrownItemOf } from './entity/thrownItems'
+import { BLOCK_ENTITIES, exportedItemEntity, fallingBlockState, thrownItemOf } from './entity/thrownItems'
 import { CUBE_MOBS, cubeMobScale, cubeMobSize, cubeMobSquish } from './entity/cubeMobs'
 import './entity/drivers'
 import { animContext } from './entity/setupAnim'
@@ -479,16 +479,6 @@ const EXPORTED_ANIMATOR_USER_DATA_KEY = '_exportedEntityAnimator'
 const ANIM_TRACKER_USER_DATA_KEY = '_entityAnimTracker'
 /** What the tracker reads of the entity, kept from its updates. */
 const ANIM_INPUT_USER_DATA_KEY = '_entityAnimInput'
-
-/** Item-like entities exported as a single item (ThrownItemRenderer): the item and the renderer's scale. */
-function exportedItemEntity(version: string, name: string): { item: string; scale: number } | undefined {
-  const exported = getExportedEntity(version, name)
-  if (!exported?.item) return undefined
-  const look = composeEntityLook(exported)
-  if (look.length !== 1 || look[0].entry.type !== 'item') return undefined
-  const [m0, m1, m2] = look[0].entry.transform
-  return { item: exported.item.replace(/^minecraft:/, ''), scale: Math.hypot(m0, m1, m2) || 1 }
-}
 
 /** Items the renderer shows for item-like entities that older data draws with missing item textures. */
 export type SceneEntity = THREE.Object3D & {
@@ -1600,8 +1590,9 @@ export class Entities {
         const object = (carried ? this.getItemMesh(carried, { 'minecraft:display_context': 'ground' }, true) : undefined) ?? this.getItemMesh({ name: itemEntity.item }, { 'minecraft:display_context': 'ground' }, true)
         if (object) {
           mesh = object.mesh
-          mesh.scale.multiplyScalar(0.5 * itemEntity.scale)
-          mesh.position.set(0, 0.1 * itemEntity.scale, 0)
+          // the item mesh has the ground scale (0.5): the renderer's own on top, the middle lifted as the game draws it
+          mesh.scale.multiplyScalar(itemEntity.scale)
+          mesh.position.set(0, itemEntity.lift, 0)
           group.additionalCleanup = () => object.cleanup?.()
         }
       } else if (entity.name === 'item' || BLOCK_ENTITIES[itemName]) {
