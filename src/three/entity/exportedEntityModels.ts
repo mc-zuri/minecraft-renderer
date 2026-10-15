@@ -2,8 +2,13 @@ import * as THREE from 'three'
 import { snakeCase } from 'change-case'
 import entityModelsIndex from 'mc-assets/dist/entityModelsIndex.json'
 import {
+  applyEntityPatch,
   composeEntityArmor,
+  composeEntityHead,
   composeEntityLook,
+  type ArmorTrimInput,
+  type EntityHeadAnchor,
+  type TrimsData,
   ENTITY_EQUIPMENT_SLOTS,
   paintingVariant,
   type PaintingsData,
@@ -136,6 +141,10 @@ const OBJECT_NAMES: Record<string, string[]> = {
   item_frames: ['item_frame'],
   'eye_of ender': ['eye_of_ender', 'eye_of_ender_signal'],
   thrown_potion: ['potion'],
+  // 1.21.5 split it in two; a client on another version's data still names it potion
+  potion: ['potion', 'splash_potion'],
+  // the experimental creaking of 1.21.2 and 1.21.3, drawn by the creaking renderer
+  creaking_transient: ['creaking'],
   'thrown_exp bottle': ['experience_bottle', 'xp_bottle'],
   armorstand: ['armor_stand'],
   fishing_hook: ['fishing_bobber'],
@@ -175,17 +184,99 @@ export const getExportedEntity = (version: string, name: string): EntityDefiniti
   return getEntityModelsStoreFor(version, name)?.getEntity(version, resolveExportedEntityName(version, name))
 }
 
-/** The metadata and equipment of a prismarine entity, as the look conditions read them. */
-export const lookInputFromEntity = (entity: { metadata?: unknown; equipment?: Array<{ name?: string } | null | undefined> }): EntityLookInput => {
+/** The item worn on the head: its name, damage (skull types before 1.13), whether it is a block (before 1.9 only blocks are drawn) and a player head's skin. */
+export type HeadItemInput = { name: string; metadata?: number; isBlock?: boolean; skin?: string }
+
+/** What an exported entity is drawn for: metadata and equipment, the trims of armor pieces and the item worn on the head. */
+export type ExportedLookInput = EntityLookInput & {
+  trims?: Partial<Record<string, ArmorTrimInput | undefined>>
+  head?: HeadItemInput
+}
+
+type PrismarineItem = { name?: string; metadata?: number; nbt?: unknown; components?: unknown; componentMap?: unknown }
+
+/** Where a player head's skin is served from (the skin url as the profile has it); a client sets a proxy. */
+let skinUrlFor: (url: string) => string = url => url
+export const setSkinUrlResolver = (resolve: (url: string) => string) => {
+  skinUrlFor = resolve
+}
+
+/**
+ * The metadata and equipment of a prismarine entity, as the look conditions read them, with the trims armor pieces have
+ * and the item worn on the head.
+ */
+export const lookInputFromEntity = (entity: { metadata?: unknown; equipment?: Array<PrismarineItem | null | undefined> }): ExportedLookInput => {
   const equipment: Record<string, string | undefined> = {}
   const equipmentColors: Record<string, number | undefined> = {}
+  const trims: Record<string, ArmorTrimInput | undefined> = {}
   for (const [index, slot] of ENTITY_EQUIPMENT_SLOTS.entries()) {
     const item = entity.equipment?.[index]
     if (item?.name) equipment[slot] = item.name
     const color = item ? itemDyeColor(item) : undefined
     if (color !== undefined) equipmentColors[slot] = color
+    const trim = item ? itemTrim(item) : undefined
+    if (trim) trims[slot] = trim
   }
-  return { metadata: (entity.metadata ?? undefined) as EntityLookInput['metadata'], equipment, equipmentColors }
+  const input: ExportedLookInput = { metadata: (entity.metadata ?? undefined) as EntityLookInput['metadata'], equipment, equipmentColors, trims }
+  const headItem = entity.equipment?.[ENTITY_EQUIPMENT_SLOTS.indexOf('head')]
+  if (headItem?.name) {
+    const blocks = (globalThis as { loadedData?: { blocksByName?: Record<string, unknown> } }).loadedData?.blocksByName
+    const skin = headItem.name === 'player_head' || headItem.name === 'skull' ? playerHeadSkin(headItem) : undefined
+    input.head = { name: headItem.name, metadata: headItem.metadata, isBlock: blocks ? !!blocks[headItem.name] : true, skin: skin && skinUrlFor(skin) }
+  }
+  return input
+}
+
+const componentData = (item: unknown, type: string) => {
+  const value = item as { components?: Array<{ type?: string; data?: unknown }>; componentMap?: Map<string, { data?: unknown }> }
+  return value.componentMap?.get?.(type)?.data ?? (Array.isArray(value.components) ? value.components.find(c => c.type === type)?.data : undefined)
+}
+
+/**
+ * An armor piece's trim: the trim component (1.20.5+: registry ids, or the pattern and material sent inline) or the Trim
+ * tag (1.19.4 to 1.20.4: ids).
+ */
+export const itemTrim = (item: unknown): ArmorTrimInput | undefined => {
+  const holder = (value: unknown, idKey: string): number | string | undefined => {
+    if (typeof value === 'number' || typeof value === 'string') return value
+    const object = value as Record<string, unknown> | undefined
+    if (!object) return undefined
+    if (typeof object[idKey] === 'number') return object[idKey] as number
+    // sent inline: a material's asset_name (or palette) or a pattern's asset_id
+    const data = (object.data ?? object) as Record<string, unknown>
+    const named = data.asset_id ?? data.assetId ?? data.asset_name ?? data.assetName ?? data.palette_id ?? data.paletteId
+    return typeof named === 'string' ? named : undefined
+  }
+  const component = componentData(item, 'trim') as { material?: unknown; pattern?: unknown } | undefined
+  if (component) {
+    const material = holder(component.material, 'materialId')
+    const pattern = holder(component.pattern, 'patternId')
+    return material === undefined || pattern === undefined ? undefined : { material, pattern }
+  }
+  const tag = (item as { nbt?: { value?: { Trim?: { value?: { material?: { value?: string }; pattern?: { value?: string } } } } } }).nbt?.value?.Trim?.value
+  if (tag?.material?.value && tag.pattern?.value) return { material: tag.material.value, pattern: tag.pattern.value }
+  return undefined
+}
+
+/** A player head's skin url: the profile component (1.20.5+) or the SkullOwner tag's textures property. */
+export const playerHeadSkin = (item: unknown): string | undefined => {
+  const decode = (value: unknown) => {
+    if (typeof value !== 'string') return undefined
+    try {
+      const json = JSON.parse(globalThis.atob ? globalThis.atob(value) : Buffer.from(value, 'base64').toString())
+      return json?.textures?.SKIN?.url as string | undefined
+    } catch {
+      return undefined
+    }
+  }
+  const profile = componentData(item, 'profile') as { properties?: Array<{ name?: string; key?: string; value?: string }> } | undefined
+  const fromComponent = profile?.properties?.find(p => p.name === 'textures' || p.key === 'textures')?.value
+  if (fromComponent) return decode(fromComponent)
+  type Tag = { value?: Record<string, Tag> & { value?: unknown } } & Record<string, unknown>
+  const nbt = (item as { nbt?: Tag }).nbt?.value as Record<string, Tag> | undefined
+  const owner = nbt?.SkullOwner?.value as Record<string, Tag> | undefined
+  const textures = (owner?.Properties?.value as Record<string, Tag> | undefined)?.textures as { value?: { value?: Array<{ Value?: { value?: string } }> } } | undefined
+  return decode(textures?.value?.value?.[0]?.Value?.value)
 }
 
 /**
@@ -208,15 +299,35 @@ export const itemDyeColor = (item: unknown): number | undefined => {
   return typeof color === 'number' ? color & 0xff_ff_ff : undefined
 }
 
-/** Everything an exported entity draws for its metadata and equipment: its look, then the armor it wears. */
-export const exportedEntityLook = (entity: EntityDefinition, input: EntityLookInput = {}) => [
-  ...composeEntityLook(entity, input),
-  ...composeEntityArmor(entity, input.equipment, input.equipmentColors)
-]
+/** What the head layer draws for the item worn on the head (a skull's entries, or the item), if anything. */
+const headDraw = (entity: EntityDefinition, input: ExportedLookInput) => (input.head ? composeEntityHead(entity, input, input.head, input.head.isBlock ?? true) : undefined)
 
-/** Identifies a look: rebuild the mesh when it changes. */
-export const lookSignature = (look: Array<{ key: string; entry: EntityLookEntry }>) =>
-  JSON.stringify(look.map(({ key, entry }) => [key, (entry as EntityModelEntry).texture, (entry as EntityModelEntry).tint, (entry as EntityBlockEntry).block]))
+/**
+ * Everything an exported entity draws for its metadata and equipment: its look (with what wearing a head item changes
+ * in it), then the armor it wears with the trims of its pieces.
+ */
+export const exportedEntityLook = (entity: EntityDefinition, input: ExportedLookInput = {}, trims?: TrimsData) => {
+  let look = composeEntityLook(entity, input)
+  const worn = headDraw(entity, input)?.worn
+  if (worn) {
+    const entries = new Map(look.map(({ key, entry }) => [key, structuredClone(entry) as unknown as Record<string, unknown>]))
+    applyEntityPatch(entries, worn)
+    look = [...entries].map(([key, entry]) => ({ key, entry: entry as unknown as EntityLookEntry }))
+  }
+  return [...look, ...composeEntityArmor(entity, input.equipment, input.equipmentColors, input.trims, trims)]
+}
+
+/** Identifies a look: rebuild the mesh when it changes (the head item too). */
+export const lookSignature = (look: Array<{ key: string; entry: EntityLookEntry }>, head?: HeadItemInput) =>
+  JSON.stringify([look.map(({ key, entry }) => [key, (entry as EntityModelEntry).texture, (entry as EntityModelEntry).tint, (entry as EntityBlockEntry).block]), head ?? null])
+
+/** The signature of what the version draws for an exported entity in this state: compare with the built rig's. */
+export const exportedEntitySignature = (version: string, name: string, input: ExportedLookInput = {}) => {
+  const entity = getExportedEntity(version, name)
+  if (!entity) return undefined
+  const trims = getEntityModelsStoreFor(version, name)?.getTrims(version)
+  return lookSignature(exportedEntityLook(entity, input, trims), input.head)
+}
 
 /**
  * The name entities are looked up by: minecraft-data's name, in snake case where it is not (1.8 to 1.10 name entities
@@ -232,6 +343,8 @@ export const entityTextureUrl = (texture: string) => `textures/${texture.replace
  * when the texture changed since), then the latest one under textures/.
  */
 export const entityTextureUrls = (texture: string, version?: string) => {
+  // a player head's skin, from its profile
+  if (/^(https?:|data:|blob:)/.test(texture)) return [texture]
   const latest = entityTextureUrl(texture)
   const folder = version ? entityTextureFolder(index, texture, version) : 'latest'
   return folder === 'latest' ? [latest] : [`textures/${folder}/${texture.replace(/^minecraft:/, '')}.png`, latest]
@@ -365,6 +478,8 @@ export type ExportedPart = {
   bone: THREE.Bone
   cubes?: THREE.Bone
   rest: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }
+  /** hidden (visible false): the bone is scaled to 0, the part's pose has this scale */
+  hidden?: THREE.Vector3
 }
 
 export type ExportedEntityRig = {
@@ -374,6 +489,10 @@ export type ExportedEntityRig = {
   parts: Map<string, ExportedPart[]>
   /** the export draws the armor the entity wears */
   armor?: boolean
+  /** every part by model and path in the model (<layer>|<path>): what the head layer moves along */
+  bones: Map<string, ExportedPart>
+  /** the head item, drawn from the anchor's frame (see {@link updateExportedHeadAnchor}) */
+  head?: { anchor: EntityHeadAnchor; group: THREE.Group }
 }
 
 export const EXPORTED_ENTITY_USER_DATA_KEY = '_exportedEntityRig'
@@ -422,7 +541,7 @@ export function materialForEntry(entry: Pick<EntityModelEntry, 'renderType' | 't
 }
 
 /** One model entry as a SkinnedMesh under a group carrying the entry's transform. */
-export function buildModelEntry(entry: EntityModelEntry, layer: EntityModelLayer, parts: Map<string, ExportedPart[]>, version?: string): THREE.Group {
+export function buildModelEntry(entry: EntityModelEntry, layer: EntityModelLayer, parts: Map<string, ExportedPart[]>, version?: string, rigBones?: Map<string, ExportedPart>): THREE.Group {
   const holder = new THREE.Group()
   holder.name = `exported_${entry.model}${entry.part ?? ''}`
   holder.matrixAutoUpdate = false
@@ -448,6 +567,8 @@ export function buildModelEntry(entry: EntityModelEntry, layer: EntityModelLayer
       exported.cubes = cubes
     }
     byPath.set(path, exported)
+    const modelPath = `${entry.model}|${entry.part ?? ''}${path}`
+    if (rigBones && !rigBones.has(modelPath)) rigBones.set(modelPath, exported)
     if (!parts.has(name)) parts.set(name, [])
     parts.get(name)!.push(exported)
     for (const [childName, child] of Object.entries(part.children ?? {})) build(child, childName, `${path}/${childName}`, bone)
@@ -506,7 +627,10 @@ export function buildModelEntry(entry: EntityModelEntry, layer: EntityModelLayer
     const part = byPath.get(path)
     if (!part) continue
     if (rest.pose) setPose(part.bone, rest.pose, rest.scale)
-    if (rest.visible === false) part.bone.scale.set(0, 0, 0)
+    if (rest.visible === false) {
+      part.hidden = part.bone.scale.clone()
+      part.bone.scale.set(0, 0, 0)
+    }
     if (rest.skipDraw && part.cubes) part.cubes.scale.set(0, 0, 0)
   }
   for (const part of byPath.values()) {
@@ -535,28 +659,30 @@ export type ExportedEntityBuild = {
   blocks: EntityBlockEntry[]
   items: EntityItemEntry[]
   custom: EntityCustomEntry[]
+  /** an item worn on the head, drawn as the item: its mesh goes under the holder, after the item model's display transform */
+  headItem?: { holder: THREE.Group; item: HeadItemInput }
 }
 
 /**
  * The entity as the game draws it for this metadata and equipment, or undefined when the version has no export for
  * it or its look draws no model (items, displays and the like are drawn elsewhere).
  */
-export function buildExportedEntity(version: string, name: string, input: EntityLookInput = {}): ExportedEntityBuild | undefined {
+export function buildExportedEntity(version: string, name: string, input: ExportedLookInput = {}): ExportedEntityBuild | undefined {
   const entity = getExportedEntity(version, name)
   if (!entity) return undefined
-  const look = exportedEntityLook(entity, input)
-  if (!look.length) return undefined
   const store = getEntityModelsStoreFor(version, name)!
+  const look = exportedEntityLook(entity, input, store.getTrims(version))
+  if (!look.length) return undefined
   const object = new THREE.Group()
   object.name = `exported_entity_${name}`
-  const rig: ExportedEntityRig = { name, signature: lookSignature(look), parts: new Map(), armor: !!entity.armor }
+  const rig: ExportedEntityRig = { name, signature: lookSignature(look, input.head), parts: new Map(), armor: !!entity.armor, bones: new Map() }
   const result: ExportedEntityBuild = { object, rig, blocks: [], items: [], custom: [] }
   for (const { entry } of look) {
     if (entry.type === 'model') {
       if (entry.renderType === 'water_mask') continue // the boat's water patch: the renderer masks water itself
       const layer = store.getModel(version, entry.model)
       if (!layer) continue
-      object.add(buildModelEntry(entry, layer, rig.parts, version))
+      object.add(buildModelEntry(entry, layer, rig.parts, version, rig.bones))
     } else if (entry.type === 'block') {
       result.blocks.push(entry)
     } else if (entry.type === 'item') {
@@ -567,8 +693,56 @@ export function buildExportedEntity(version: string, name: string, input: Entity
   }
   // only blocks, items or custom geometry (tnt, falling blocks, thrown items, experience orbs): drawn elsewhere
   if (!object.children.length) return undefined
+  const head = headDraw(entity, input)
+  if (head) {
+    // the head item hangs from the anchor's frame, moved with the head every frame
+    const group = new THREE.Group()
+    group.name = 'exported_head_item'
+    group.matrixAutoUpdate = false
+    object.add(group)
+    rig.head = { anchor: head.anchor, group }
+    for (const { entry } of head.entries ?? []) {
+      const layer = store.getModel(version, entry.model)
+      if (!layer) continue
+      // a player head with a profile draws its skin
+      const textured = input.head?.skin && entry.model.includes('player_head') ? { ...entry, texture: input.head.skin } : entry
+      group.add(buildModelEntry(textured, layer, new Map(), version))
+    }
+    if (head.item) {
+      const holder = new THREE.Group()
+      holder.name = 'exported_head_item_pose'
+      holder.matrixAutoUpdate = false
+      holder.matrix.fromArray(head.item.transform)
+      group.add(holder)
+      result.headItem = { holder, item: input.head! }
+    }
+    updateExportedHeadAnchor(rig)
+  }
   object.userData[EXPORTED_ENTITY_USER_DATA_KEY] = rig
   return result
+}
+
+const anchorLocal = new THREE.Matrix4()
+const anchorPosition = new THREE.Vector3()
+const anchorRotation = new THREE.Quaternion()
+
+/**
+ * Moves the head item to where the head layer draws it: the anchor's transform, then each part of its chain as the
+ * game moves along it (ModelPart.translateAndRotate: position / 16, rotation z, y, x, scale), posed as the rig is now
+ * (head look, an armor stand's head pose).
+ */
+export function updateExportedHeadAnchor(rig: ExportedEntityRig) {
+  if (!rig.head) return
+  const { anchor, group } = rig.head
+  const matrix = group.matrix.fromArray(anchor.transform)
+  for (const path of anchor.chain) {
+    const part = rig.bones.get(`${anchor.model}|${path}`)
+    if (!part) continue
+    anchorPosition.copy(part.bone.position).multiplyScalar(1 / 16)
+    anchorRotation.setFromEuler(part.bone.rotation)
+    matrix.multiply(anchorLocal.compose(anchorPosition, anchorRotation, part.hidden ?? part.bone.scale))
+  }
+  group.matrixWorldNeedsUpdate = true
 }
 
 // ---- paintings -----------------------------------------------------------------------------------------------------
@@ -808,4 +982,29 @@ export function prismarineToGameHeadAngles(bodyYaw: number, headYaw: number, pit
   let net = (((bodyYaw - headYaw + Math.PI) % tau) + tau) % tau - Math.PI
   if (net === -Math.PI) net = Math.PI
   return { netHeadYaw: net, headPitch: -pitch }
+}
+
+// ---- head items ----------------------------------------------------------------------------------------------------
+
+/** item/generated's head display transform (handheld items have it too): flat items worn on the head. */
+const GENERATED_HEAD = { rotation: [0, 180, 0], translation: [0, 13, 7], scale: [1, 1, 1] }
+
+/**
+ * An item model's head display transform as ItemTransform.apply does it: translate (pixels / 16, clamped to 80), rotate
+ * x, y, z (Quaternionf.rotationXYZ), scale (clamped to 4). Block models without one have none; flat items have
+ * item/generated's.
+ */
+export function headItemDisplayTransform(isBlock: boolean, head?: { rotation?: number[]; translation?: number[]; scale?: number[] }): THREE.Group {
+  const transform = head ?? (isBlock ? undefined : GENERATED_HEAD)
+  const group = new THREE.Group()
+  group.name = 'head_item_display'
+  if (!transform) return group
+  const clamp = (value: number | undefined, limit: number, fallback: number) => THREE.MathUtils.clamp(value ?? fallback, -limit, limit)
+  const [tx, ty, tz] = transform.translation ?? []
+  group.position.set(clamp(tx, 80, 0) / 16, clamp(ty, 80, 0) / 16, clamp(tz, 80, 0) / 16)
+  const [rx = 0, ry = 0, rz = 0] = transform.rotation ?? []
+  group.rotation.set(THREE.MathUtils.degToRad(rx), THREE.MathUtils.degToRad(ry), THREE.MathUtils.degToRad(rz), 'XYZ')
+  const [sx, sy, sz] = transform.scale ?? []
+  group.scale.set(clamp(sx, 4, 1), clamp(sy, 4, 1), clamp(sz, 4, 1))
+  return group
 }

@@ -27,6 +27,8 @@ import {
   isEntityModelsVersionCovered,
   lookInputFromEntity,
   prismarineToGameHeadAngles,
+  itemTrim,
+  updateExportedHeadAnchor,
   type ExportedPart
 } from './exportedEntityModels'
 import { isBoatEntityName } from './boatModelRotation'
@@ -251,7 +253,7 @@ function drawnQuads(version: string, entry: EntityModelEntry) {
 describe.each([reference26, reference1214, reference1204, reference1144, reference189] as unknown as Array<Record<string, Record<string, number[][][]> | string>>)('built meshes draw what $version draws', reference => {
   const version = reference.version as string
   for (const [name, entries] of Object.entries(reference)) {
-    if (typeof entries === 'string' || name === 'paintings') continue
+    if (typeof entries === 'string' || name === 'paintings' || name === 'animations') continue
     test(name, () => {
       const look = composeEntityLook(getExportedEntity(version, name)!)
       for (const [key, expected] of Object.entries(entries)) {
@@ -352,7 +354,9 @@ describe('exports loaded per version', () => {
   })
 
   test('an entity behind a feature flag in its release is drawn from the next export that has it', () => {
-    expect(entityExportVersionFor('1.19.4', 'camel')).toBe('1.20.1')
+    // the 1.19.4 export has the 1.20 experiment (armor trims): its camels and sniffers too
+    expect(entityExportVersionFor('1.19.4', 'camel')).toBe('1.19.4')
+    expect(entityExportVersionFor('1.20.4', 'breeze')).toBe('1.21.1')
     expect(entityExportVersionFor('1.20.5', 'breeze')).toBe('1.21.1')
     expect(entityExportVersionFor('1.19.4', 'cow')).toBe('1.19.4')
     expect(buildExportedEntity('1.19.4', 'camel')).toBeTruthy()
@@ -472,5 +476,109 @@ describe('armor', () => {
     for (const name of ['armor_stand', 'skeleton', 'piglin', 'drowned', 'husk', 'zombified_piglin']) {
       expect(getExportedEntity(VERSION, name)?.armor?.chest?.diamond_chestplate, name).toBeTruthy()
     }
+  })
+})
+
+describe('armor trims', () => {
+  test('a trimmed piece draws its trim over itself: the darker palette on armor of its own material', () => {
+    const zombie = getExportedEntity(VERSION, 'zombie')!
+    const trims = getEntityModelsStore(VERSION)!.getTrims(VERSION)!
+    const look = exportedEntityLook(zombie, { equipment: { chest: 'iron_chestplate', feet: 'golden_boots' }, trims: { chest: { pattern: 'minecraft:coast', material: 'minecraft:iron' }, feet: { pattern: 'coast', material: 'iron' } } }, trims)
+    const textures = look.filter(({ key }) => key.includes('/trim/')).map(({ entry }) => (entry as EntityModelEntry).texture).sort()
+    expect(textures).toEqual(['minecraft:trims/entity/humanoid/coast_iron', 'minecraft:trims/entity/humanoid/coast_iron_darker'])
+    const build = buildExportedEntity(VERSION, 'zombie', { equipment: { chest: 'iron_chestplate' }, trims: { chest: { pattern: 0, material: 0 } } })!
+    expect(build.object.children.length).toBe(buildExportedEntity(VERSION, 'zombie', { equipment: { chest: 'iron_chestplate' } })!.object.children.length + 1)
+  })
+
+  test('1.19.4 to 1.21.1 trims are named after the armor model layer, before 1.19.4 there are none', () => {
+    const look = exportedEntityLook(getExportedEntity('1.20.4', 'zombie')!, { equipment: { legs: 'iron_leggings' }, trims: { legs: { pattern: 'minecraft:coast', material: 'minecraft:iron' } } }, getEntityModelsStore('1.20.4')!.getTrims('1.20.4'))
+    expect(new Set(look.filter(({ key }) => key.includes('/trim/')).map(({ entry }) => (entry as EntityModelEntry).texture))).toEqual(new Set(['minecraft:trims/models/armor/coast_leggings_iron_darker']))
+    expect(getExportedEntity('1.19.2', 'zombie')!.armor!.legs!.iron_leggings!.trim).toBeUndefined()
+  })
+
+  test('an item has its trim in the trim component (registry ids, or inline) or the Trim tag', () => {
+    expect(itemTrim({ components: [{ type: 'trim', data: { material: { materialId: 3 }, pattern: { patternId: 1 }, showInTooltip: true } }] })).toEqual({ material: 3, pattern: 1 })
+    expect(itemTrim({ componentMap: new Map([['trim', { data: { material: { data: { assetName: 'iron' } }, pattern: { patternId: 2 } } }]]) })).toEqual({ material: 'iron', pattern: 2 })
+    expect(itemTrim({ nbt: { value: { Trim: { value: { material: { value: 'minecraft:gold' }, pattern: { value: 'minecraft:rib' } } } } } })).toEqual({ material: 'minecraft:gold', pattern: 'minecraft:rib' })
+    expect(itemTrim({ name: 'iron_chestplate' })).toBeUndefined()
+    const input = lookInputFromEntity({ equipment: [undefined, undefined, undefined, undefined, { name: 'iron_chestplate', components: [{ type: 'trim', data: { material: { materialId: 0 }, pattern: { patternId: 0 } } }] }] })
+    expect(input.trims?.chest).toEqual({ material: 0, pattern: 0 })
+  })
+})
+
+describe('head items', () => {
+  const headGroup = (build: ReturnType<typeof buildExportedEntity>) => build!.object.children.find(child => child.name === 'exported_head_item') as THREE.Group | undefined
+
+  /** The anchor's frame as the export composes it: its transform, then each part of its chain in the rig's pose. */
+  const expectedFrame = (rig: NonNullable<ReturnType<typeof buildExportedEntity>>['rig'], anchor: { model: string; chain: string[]; transform: number[] }) => {
+    const matrix = new THREE.Matrix4().fromArray(anchor.transform)
+    for (const path of anchor.chain) {
+      const part = rig.bones.get(`${anchor.model}|${path}`)!
+      const local = new THREE.Matrix4().compose(part.bone.position.clone().multiplyScalar(1 / 16), new THREE.Quaternion().setFromEuler(part.bone.rotation), part.hidden ?? part.bone.scale)
+      matrix.multiply(local)
+    }
+    return matrix
+  }
+
+  test('a zombie wears a skull on its head, and it turns with the head', () => {
+    const build = buildExportedEntity(VERSION, 'zombie', { head: { name: 'skeleton_skull' } })!
+    const group = headGroup(build)!
+    expect(build.rig.head?.anchor.chain).toEqual(['', '/head'])
+    expect(group.children.length).toBe(1)
+    expect(group.matrix.elements).toEqual(expectedFrame(build.rig, build.rig.head!.anchor).elements)
+    const before = group.matrix.clone()
+    applyExportedEntityPose(build.rig, { netHeadYaw: 0.5, headPitch: 0.3, limbSwing: 0, limbSwingAmount: 0 })
+    updateExportedHeadAnchor(build.rig)
+    expect(group.matrix.equals(before)).toBe(false)
+    const head = build.rig.bones.get('minecraft:zombie#main|/head')!
+    expect(head.bone.rotation.y).toBeCloseTo(0.5)
+    expect(group.matrix.elements.map(v => +v.toFixed(5))).toEqual(expectedFrame(build.rig, build.rig.head!.anchor).elements.map(v => +v.toFixed(5)))
+  })
+
+  test('other items are drawn as items, head armor as armor, and a player head with its skin', () => {
+    expect(buildExportedEntity(VERSION, 'zombie', { head: { name: 'carved_pumpkin' } })!.headItem?.item.name).toBe('carved_pumpkin')
+    const helmet = buildExportedEntity(VERSION, 'zombie', { head: { name: 'iron_helmet' }, equipment: { head: 'iron_helmet' } })!
+    expect(helmet.headItem).toBeUndefined()
+    expect(headGroup(helmet)).toBeUndefined()
+    const skin = 'https://textures.minecraft.net/texture/abc'
+    const playerHead = headGroup(buildExportedEntity(VERSION, 'zombie', { head: { name: 'player_head', skin } }))!
+    expect(playerHead.children[0]!.name).toContain('player_head')
+    expect(entityTextureUrls(skin, VERSION)).toEqual([skin])
+  })
+
+  test('a baby zombie wears it from its own anchor', () => {
+    const zombie = getExportedEntity(VERSION, 'zombie')!
+    const variant = zombie.head!.variants![0]!
+    const metadata = Object.fromEntries(variant.when.map(c => ['index' in c ? c.index : 0, 'value' in c ? c.value : true]))
+    const baby = buildExportedEntity(VERSION, 'zombie', { metadata, head: { name: 'skeleton_skull' } })!
+    expect(baby.rig.head!.anchor).toEqual(variant.anchor)
+  })
+
+  test.each(dataVersions())('%s: zombies, skeletons and armor stands wear skulls and pumpkins', version => {
+    const flattened = !version.startsWith('1.') || Number(version.split('.')[1]) >= 13
+    const skull = flattened ? { name: 'skeleton_skull' } : { name: 'skull', metadata: 0 }
+    const pumpkin = flattened ? 'carved_pumpkin' : 'pumpkin'
+    for (const name of ['zombie', 'skeleton', 'armor_stand']) {
+      const exported = resolveExportedEntityName(version, name)
+      const build = buildExportedEntity(version, exported, { head: skull })!
+      expect(headGroup(build)?.children.length, `${version} ${name}`).toBeGreaterThan(0)
+      expect(buildExportedEntity(version, exported, { head: { name: pumpkin, isBlock: true } })!.headItem, `${version} ${name}`).toBeTruthy()
+    }
+  })
+
+  test('the head item of the entity: name, damage, a player head skin from its profile', () => {
+    const textures = Buffer.from(JSON.stringify({ textures: { SKIN: { url: 'http://textures.minecraft.net/texture/x' } } })).toString('base64')
+    const profileHead = { name: 'player_head', components: [{ type: 'profile', data: { properties: [{ name: 'textures', value: textures }] } }] }
+    expect(lookInputFromEntity({ equipment: [undefined, undefined, undefined, undefined, undefined, profileHead] }).head).toMatchObject({ name: 'player_head', skin: 'http://textures.minecraft.net/texture/x' })
+    const tagged = { name: 'skull', metadata: 3, nbt: { value: { SkullOwner: { value: { Properties: { value: { textures: { value: { value: [{ Value: { value: textures } }] } } } } } } } } }
+    expect(lookInputFromEntity({ equipment: [undefined, undefined, undefined, undefined, undefined, tagged] }).head).toMatchObject({ name: 'skull', metadata: 3, skin: 'http://textures.minecraft.net/texture/x' })
+  })
+})
+
+describe('versions between exports', () => {
+  test('entities of a release between two exports are drawn from the export it reads, or the next that has them', () => {
+    expect(buildExportedEntity('1.21.3', resolveExportedEntityName('1.21.3', 'creaking_transient'))).toBeTruthy()
+    expect(resolveExportedEntityName('1.21.7', 'potion')).toBe('splash_potion')
+    expect(resolveExportedEntityName('1.21.4', 'potion')).toBe('potion')
   })
 })

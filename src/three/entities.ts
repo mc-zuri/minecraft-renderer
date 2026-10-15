@@ -67,7 +67,10 @@ import {
   type ExportedEntityBuild,
   type ExportedEntityRig,
   buildExportedPainting,
-  exportedEntityLook,
+  exportedEntitySignature,
+  setSkinUrlResolver,
+  updateExportedHeadAnchor,
+  headItemDisplayTransform,
   PAINTING_SIGNATURE_USER_DATA_KEY,
   paintingInputFromEntity,
   paintingSignature,
@@ -501,6 +504,11 @@ export class Entities {
     this.debugMode = 'none'
     this.onSkinUpdate = () => {}
     this.watchResourcesUpdates()
+    // player heads worn by exported entities load their skin through the client's proxy
+    setSkinUrlResolver(url => {
+      const { skinTexturesProxy } = this.worldRenderer.worldRendererConfig
+      return skinTexturesProxy ? url.replace('http://textures.minecraft.net/', skinTexturesProxy).replace('https://textures.minecraft.net/', skinTexturesProxy) : url
+    })
     // entities drawn with the older models while their export loaded: build them from it
     onEntityModelsLoaded(() => {
       for (const e of Object.values(this.entities)) {
@@ -689,6 +697,7 @@ export class Entities {
         const angles = prismarineToGameHeadAngles(entity.userData._exportedBodyYaw ?? 0, entity.userData._exportedHeadYaw ?? entity.userData._exportedBodyYaw ?? 0, entity.userData._exportedPitch ?? 0)
         applyExportedEntityPose(exportedRig, { ...angles, limbSwing: walk.limbSwing, limbSwingAmount: walk.limbSwingAmount })
       }
+      if (exportedRig) updateExportedHeadAnchor(exportedRig)
 
       entity.traverse(child => {
         if (child instanceof Entity.EntityMesh) {
@@ -1240,10 +1249,11 @@ export class Entities {
     }
   }
 
-  /** Blocks an exported model draws (minecart contents, mooshroom mushrooms, the snow golem's pumpkin). */
+  /** Blocks an exported model draws (minecart contents, mooshroom mushrooms, the snow golem's pumpkin), and an item worn on the head. */
   attachExportedExtras(mesh: THREE.Object3D) {
     const build = mesh.userData[EXPORTED_BUILD_USER_DATA_KEY] as ExportedEntityBuild | undefined
     if (!build) return
+    if (build.headItem) this.attachHeadItem(build.headItem)
     for (const block of build.blocks) {
       const name = block.block?.replace(/^minecraft:/, '').replace(/\[.*$/, '')
       if (!name) continue
@@ -1271,6 +1281,34 @@ export class Entities {
       holder['additionalCleanup'] = () => object!.cleanup?.()
       mesh.add(holder)
     }
+  }
+
+  /**
+   * An item worn on the head, drawn as the item (ItemRenderer with the head display context): the item model's head
+   * display transform, then the model over -0.5 to 0.5, under the pose the head layer draws it with.
+   */
+  private attachHeadItem(headItem: NonNullable<ExportedEntityBuild['headItem']>) {
+    const item = { name: headItem.item.name, metadata: headItem.item.metadata }
+    let object: ReturnType<Entities['getItemMesh']>
+    try {
+      object = this.getItemMesh(item, { 'minecraft:display_context': 'head' })
+    } catch {
+      return
+    }
+    if (!object) return
+    let resolvedModel: { display?: Record<string, { rotation?: number[]; translation?: number[]; scale?: number[] }> } | undefined
+    try {
+      const data = this.worldRenderer.getItemRenderData(item, { 'minecraft:display_context': 'head' })
+      resolvedModel = data && 'resolvedModel' in data ? (data.resolvedModel as typeof resolvedModel) : undefined
+    } catch {}
+    const display = headItemDisplayTransform(object.isBlock, resolvedModel?.display?.head)
+    const centered = new THREE.Group()
+    // the item group is centered; block items are turned -90 degrees like the game's block model
+    if (object.isBlock) centered.rotation.y = Math.PI / 2
+    centered.add(object.mesh)
+    display.add(centered)
+    headItem.holder.add(display)
+    headItem.holder['additionalCleanup'] = () => object!.cleanup?.()
   }
 
   setVisible(mesh: THREE.Object3D, visible: boolean) {
@@ -1473,7 +1511,7 @@ export class Entities {
       }
       if (mesh && (rig || awaiting)) {
         const exported = getExportedEntity(this.worldRenderer.version, rig?.name ?? entityModelName(entity.name!))
-        if (exported && (awaiting || lookSignature(exportedEntityLook(exported, lookInputFromEntity(entity))) !== rig!.signature)) {
+        if (exported && (awaiting || exportedEntitySignature(this.worldRenderer.version, rig!.name, lookInputFromEntity(entity)) !== rig!.signature)) {
           const rebuilt = getEntityMesh(this.mcData, entity, this.worldRenderer, this.entitiesOptions, { ...overrides, customModel: entity['customModel'] })
           if (rebuilt) {
             rebuilt.name = 'mesh'
@@ -1556,6 +1594,7 @@ export class Entities {
       }
       if (mesh?.userData[EXPORTED_ENTITY_USER_DATA_KEY]) {
         poseExportedArmorStand(mesh.userData[EXPORTED_ENTITY_USER_DATA_KEY] as ExportedEntityRig, armorStandMeta)
+        updateExportedHeadAnchor(mesh.userData[EXPORTED_ENTITY_USER_DATA_KEY] as ExportedEntityRig)
       } else e.traverse(c => {
         switch (c.name) {
           case 'bone_baseplate':
