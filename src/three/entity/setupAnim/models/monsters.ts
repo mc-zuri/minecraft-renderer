@@ -4,7 +4,7 @@ import { HumanoidModel } from './humanoid'
 
 /**
  * Monsters (creeper, enderman, spider, slimes, blaze, ghasts, phantom, silverfish, endermite, shulker, wither, ender
- * dragon), 26.3.
+ * dragon), 26.3; the same code since 1.21.2 (LavaSlimeModel is the old name of MagmaCubeModel).
  */
 
 export class CreeperModel extends AnimModel {
@@ -472,6 +472,8 @@ export const MONSTERS_MODELS: Record<string, AnimModelClass> = {
   SpiderModel,
   SlimeModel: AnimModel,
   MagmaCubeModel,
+  // 1.21.2 - 1.21.10 name of MagmaCubeModel (same code)
+  LavaSlimeModel: MagmaCubeModel,
   SulfurCubeModel: AnimModel,
   SmallSulfurCubeModel: AnimModel,
   BlazeModel,

@@ -33,6 +33,22 @@ export type EntityAnimInput = {
   customName?: string
   /** what the client tells the renderer about a vehicle (paddles, water patch, passengers) */
   renderHints?: EntityRenderHints
+  /** the entity's network id (phantom flapping, witch nose, minecart offsets vary by it) */
+  entityId?: number
+  /** the last velocity the server sent, blocks per tick */
+  velocity?: { x: number; y: number; z: number }
+  /** the entity has passengers */
+  isVehicle?: boolean
+  /** the max_health attribute, when the server sent attributes */
+  maxHealth?: number
+  /** the entity is in water (a block lookup the client makes: given by the client when it knows) */
+  isInWater?: boolean
+  /** the level's game time in ticks (the time packet's world age, counted on), when the client gives it */
+  gameTime?: number
+  /** the camera's eye position (a guardian looks at it) */
+  cameraEyePosition?: { x: number; y: number; z: number }
+  /** another entity's position and eye height, by network id (attack targets, a wither's head targets) */
+  lookupEntity?: (id: number) => { x: number; y: number; z: number; eyeY: number; eyeHeight?: number; height?: number } | undefined
 }
 
 /** Flags of the shared, living and mob flag bytes. */
@@ -325,6 +341,11 @@ export function entityAnimState(tracker: EntityAnimTracker, input: EntityAnimInp
     offHandItem: input.equipment?.offhand
   }
   state.wornHeadAnimationPos = state.walkAnimationPos
+  // before 26.1 the humanoid render state had the swing as attackTime and attackArm (and its type from 1.21.11)
+  state.attackTime = swingAnimation
+  state.attackAnim = swingAnimation
+  state.attackArm = swing.hand === 'OFF_HAND' ? (state.mainArm === 'RIGHT' ? 'LEFT' : 'RIGHT') : state.mainArm
+  state.swingAnimationType = swing.type
   state.rightHandItem = state.mainArm === 'RIGHT' ? state.mainHandItem : state.offHandItem
   state.leftHandItem = state.mainArm === 'RIGHT' ? state.offHandItem : state.mainHandItem
   for (const [field, start] of Object.entries(tracker.animationStates)) state[field] = start

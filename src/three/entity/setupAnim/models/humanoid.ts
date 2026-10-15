@@ -90,6 +90,48 @@ export class AnimationUtils {
       leftArm.zRot = 0
     }
   }
+
+  /**
+   * animateZombieArms before 26.3 (called after the whole humanoid setupAnim, from the attack time): 1.21.11 skips the
+   * attack pose for a stab, 26.1 leaves a baby holding something alone, 26.2 keeps its arms down instead.
+   */
+  static animateZombieArmsLegacy(m: AnimModel, leftArm: PartPose, rightArm: PartPose, aggressive: boolean, state: AnimState) {
+    const { c } = m
+    const { sin } = c
+    const babyHolding = !!state.isBaby && !!state.mainHandItem
+    if (c.atLeast('26.1') && !c.atLeast('26.2') && babyHolding) return
+    if (!c.atLeast('1.21.11') || (state.swingAnimationType ?? 'WHACK') !== 'STAB') {
+      const attackTime = state.attackTime as number
+      if (c.atLeast('26.2')) {
+        // animateAttackArms
+        const raiseArms = !babyHolding
+        const armDrop = raiseArms ? f(-PI / (aggressive ? 1.5 : f(2.25))) : 0
+        const attackYRotModifier = f((raiseArms ? 1 : -1) * sin(f(attackTime * PI)))
+        const attackXRotModifier = sin(f(f(1 - f(f(1 - attackTime) * f(1 - attackTime))) * PI))
+        const xRot = f(f(armDrop + f(attackYRotModifier * f(1.2))) - f(attackXRotModifier * f(0.4)))
+        const yRot = f(f(0.1) - f(attackYRotModifier * f(0.6)))
+        rightArm.xRot = xRot
+        rightArm.yRot = raiseArms ? -yRot : yRot
+        rightArm.zRot = 0
+        leftArm.xRot = xRot
+        leftArm.yRot = raiseArms ? yRot : -yRot
+        leftArm.zRot = 0
+      } else {
+        const armDrop = f(-PI / (aggressive ? 1.5 : f(2.25)))
+        const attack2 = sin(f(attackTime * PI))
+        const attack = sin(f(f(1 - f(f(1 - attackTime) * f(1 - attackTime))) * PI))
+        rightArm.zRot = 0
+        leftArm.zRot = 0
+        rightArm.yRot = -f(f(0.1) - f(attack2 * f(0.6)))
+        leftArm.yRot = f(f(0.1) - f(attack2 * f(0.6)))
+        rightArm.xRot = armDrop
+        leftArm.xRot = armDrop
+        rightArm.xRot = f(rightArm.xRot + f(f(attack2 * f(1.2)) - f(attack * f(0.4))))
+        leftArm.xRot = f(leftArm.xRot + f(f(attack2 * f(1.2)) - f(attack * f(0.4))))
+      }
+    }
+    AnimationUtils.bobArms(m, rightArm, leftArm, state.ageInTicks)
+  }
 }
 
 /** The use parameters of a kinetic weapon (spears): the item's kinetic_weapon component, as the renderer gives it. */
@@ -127,7 +169,9 @@ export class SpearAnimations {
     if (state.isFallFlying || state.swimAmount > 0) arm.xRot = f(arm.xRot - f(0.959_931_1))
     arm.yRot = f(DEG_TO_RAD * clamp(f(f(57.295_776) * arm.yRot), -60, 60))
     arm.xRot = f(DEG_TO_RAD * clamp(f(f(57.295_776) * arm.xRot), -120, 30))
-    if (!(state.ticksUsingItem <= 0) && (!state.isUsingItem || handArm(state.useItemHand, state.mainArm) === holdingArm) && weapon) {
+    // before 26.3 the hand in use is compared to the arm's side, not to the arm it is with the main arm
+    const usedArm = m.c.atLeast('26.3') ? handArm(state.useItemHand, state.mainArm) === holdingArm : state.useItemHand === (holdingArm === 'RIGHT' ? 'MAIN_HAND' : 'OFF_HAND')
+    if (!(state.ticksUsingItem <= 0) && (!state.isUsingItem || usedArm) && weapon) {
       const p = SpearAnimations.useParams(m, weapon, state.ticksUsingItem)
       arm.yRot = f(arm.yRot + f(f(f(-invert * p.swayScaleFast) * DEG_TO_RAD) * p.swayIntensity))
       arm.zRot = f(arm.zRot + f(f(f(f(-invert * p.swayScaleSlow) * DEG_TO_RAD) * p.swayIntensity) * 0.5))
@@ -161,6 +205,17 @@ export class SpearAnimations {
   }
 }
 
+/** ArmPose.affectsOffhandPose of 1.21.11 - 26.2 (SPEAR too; 26.3 dropped it) */
+const AFFECTS_OFFHAND_1_21_11 = new Set([...AFFECTS_OFFHAND, 'SPEAR'])
+/** THROW_TRIDENT, named THROW_SPEAR before 1.21.11 */
+const isThrowTrident = (pose: string | undefined) => pose === 'THROW_TRIDENT' || pose === 'THROW_SPEAR'
+
+/**
+ * HumanoidModel. 26.3 runs the attack swing from the render state's current swing and lets subclasses replace the swim
+ * animation; before it (1.21.2 - 26.2) the swing comes from attackTime / attackArm, the swimming head turns before the
+ * walk, and zombies pose their arms after the whole humanoid setupAnim (see each subclass). Before 1.21.4 the arm poses
+ * are the model's own getArmPose (EMPTY unless a subclass knows better), from 1.21.4 the render state's.
+ */
 export class HumanoidModel extends AnimModel {
   head = this.part('head')
   hat = this.model.maybe('hat')
@@ -171,12 +226,105 @@ export class HumanoidModel extends AnimModel {
   leftLeg = this.part('left_leg')
 
   override setupAnim(state: AnimState) {
+    if (!this.c.atLeast('26.3')) {
+      this.setupAnimLegacy(state)
+      return
+    }
     super.setupAnim(state)
-    const { cos } = this.c
     const swimAmount = state.swimAmount as number
     this.head.xRot = f(state.xRot * DEG_TO_RAD)
     this.head.yRot = f(state.yRot * DEG_TO_RAD)
     if (state.isFallFlying) this.head.xRot = f(-0.785_398_2)
+    const animationPos = state.walkAnimationPos as number
+    this.setupWalkAnimation(state)
+    let prioritizeArm: string
+    if (state.isUsingItem) {
+      prioritizeArm = handArm(state.useItemHand, state.mainArm)
+    } else {
+      const offHandArm = handArm('OFF_HAND', state.mainArm)
+      prioritizeArm = TWO_HANDED.has(this.armPose(state, offHandArm)) ? state.mainArm : offHandArm
+    }
+    if (prioritizeArm === 'RIGHT') {
+      this.poseRightArm(state)
+      if (!AFFECTS_OFFHAND.has(state.rightArmPose)) this.poseLeftArm(state)
+    } else {
+      this.poseLeftArm(state)
+      if (!AFFECTS_OFFHAND.has(state.leftArmPose)) this.poseRightArm(state)
+    }
+    this.setupAttackAnimation(state)
+    this.setupCrouchAnimation(state)
+    if (state.rightArmPose !== 'SPYGLASS') AnimationUtils.bobModelPart(this, this.rightArm, state.ageInTicks, 1)
+    if (state.leftArmPose !== 'SPYGLASS') AnimationUtils.bobModelPart(this, this.leftArm, state.ageInTicks, -1)
+    if (swimAmount > 0) this.setupSwimAnimation(state, animationPos, swimAmount)
+  }
+
+  /** HumanoidModel.setupAnim before 26.3 */
+  setupAnimLegacy(state: AnimState) {
+    super.setupAnim(state)
+    const { cos } = this.c
+    const since1_21_11 = this.c.atLeast('1.21.11')
+    const leftArmPose = this.legacyArmPose(state, 'LEFT')
+    const rightArmPose = this.legacyArmPose(state, 'RIGHT')
+    const swimAmount = state.swimAmount as number
+    this.head.xRot = f(state.xRot * DEG_TO_RAD)
+    this.head.yRot = f(state.yRot * DEG_TO_RAD)
+    if (state.isFallFlying) this.head.xRot = f(-0.785_398_2)
+    else if (swimAmount > 0) this.head.xRot = rotLerpRad(swimAmount, this.head.xRot, f(-0.785_398_2))
+    const animationPos = state.walkAnimationPos as number
+    this.setupWalkAnimation(state)
+    // 1.21.11 also poses the other arm unless the first arm's pose affects it; before, using an item poses only its arm
+    const affectsOffhand = (pose: string) => since1_21_11 && AFFECTS_OFFHAND_1_21_11.has(pose)
+    const rightHanded = state.mainArm === 'RIGHT'
+    if (state.isUsingItem) {
+      const mainHandUsed = state.useItemHand === 'MAIN_HAND'
+      if (mainHandUsed === rightHanded) {
+        this.poseArm(state, true, rightArmPose)
+        if (since1_21_11 && !affectsOffhand(rightArmPose)) this.poseArm(state, false, leftArmPose)
+      } else {
+        this.poseArm(state, false, leftArmPose)
+        if (since1_21_11 && !affectsOffhand(leftArmPose)) this.poseArm(state, true, rightArmPose)
+      }
+    } else {
+      const twoHandedOffhand = TWO_HANDED.has(rightHanded ? leftArmPose : rightArmPose)
+      if (rightHanded !== twoHandedOffhand) {
+        this.poseArm(state, false, leftArmPose)
+        if (!affectsOffhand(leftArmPose)) this.poseArm(state, true, rightArmPose)
+      } else {
+        this.poseArm(state, true, rightArmPose)
+        if (!affectsOffhand(rightArmPose)) this.poseArm(state, false, leftArmPose)
+      }
+    }
+    this.setupAttackAnimation(state)
+    this.setupCrouchAnimation(state)
+    if (rightArmPose !== 'SPYGLASS') AnimationUtils.bobModelPart(this, this.rightArm, state.ageInTicks, 1)
+    if (leftArmPose !== 'SPYGLASS') AnimationUtils.bobModelPart(this, this.leftArm, state.ageInTicks, -1)
+    if (swimAmount > 0) {
+      const swimPos = f(animationPos % 26)
+      const attacking = state.attackTime > 0
+      const rightArmSwimAmount = (since1_21_11 && state.rightArmPose === 'SPEAR') || (state.attackArm === 'RIGHT' && attacking) ? 0 : swimAmount
+      const leftArmSwimAmount = (since1_21_11 && state.leftArmPose === 'SPEAR') || (state.attackArm === 'LEFT' && attacking) ? 0 : swimAmount
+      if (!state.isUsingItem) this.swimArms(swimPos, leftArmSwimAmount, rightArmSwimAmount)
+      this.leftLeg.xRot = lerp(swimAmount, this.leftLeg.xRot, f(f(0.3) * cos(f(f(animationPos * f(0.333_333_34)) + PI))))
+      this.rightLeg.xRot = lerp(swimAmount, this.rightLeg.xRot, f(f(0.3) * cos(f(animationPos * f(0.333_333_34)))))
+    }
+  }
+
+  /**
+   * The arm pose setupAnim uses before 26.3: from 1.21.4 the render state's; before, the model's getArmPose, EMPTY here
+   * (SkeletonModel and DrownedModel override it).
+   */
+  legacyArmPose(state: AnimState, arm: string): string {
+    if (!this.c.atLeast('1.21.4')) return 'EMPTY'
+    return (arm === 'RIGHT' ? state.rightArmPose : state.leftArmPose) ?? 'EMPTY'
+  }
+
+  /** The swing progress the attack animations read: 26.3's swingAnimation, attackTime before. */
+  attackTime(state: AnimState): number {
+    return (this.c.atLeast('26.3') ? state.swingAnimation : state.attackTime) ?? 0
+  }
+
+  setupWalkAnimation(state: AnimState) {
+    const { cos } = this.c
     const animationPos = state.walkAnimationPos as number
     const animationSpeed = state.walkAnimationSpeed as number
     const speedValue = state.speedValue as number
@@ -198,21 +346,9 @@ export class HumanoidModel extends AnimModel {
       this.leftLeg.yRot = f(-0.314_159_27)
       this.leftLeg.zRot = f(-0.078_539_82)
     }
-    let prioritizeArm: string
-    if (state.isUsingItem) {
-      prioritizeArm = handArm(state.useItemHand, state.mainArm)
-    } else {
-      const offHandArm = handArm('OFF_HAND', state.mainArm)
-      prioritizeArm = TWO_HANDED.has(this.armPose(state, offHandArm)) ? state.mainArm : offHandArm
-    }
-    if (prioritizeArm === 'RIGHT') {
-      this.poseRightArm(state)
-      if (!AFFECTS_OFFHAND.has(state.rightArmPose)) this.poseLeftArm(state)
-    } else {
-      this.poseLeftArm(state)
-      if (!AFFECTS_OFFHAND.has(state.leftArmPose)) this.poseRightArm(state)
-    }
-    this.setupAttackAnimation(state)
+  }
+
+  setupCrouchAnimation(state: AnimState) {
     if (state.isCrouching) {
       this.body.xRot = 0.5
       this.rightArm.xRot = f(this.rightArm.xRot + f(0.4))
@@ -224,9 +360,6 @@ export class HumanoidModel extends AnimModel {
       this.leftArm.y = f(this.leftArm.y + f(3.2))
       this.rightArm.y = f(this.rightArm.y + f(3.2))
     }
-    if (state.rightArmPose !== 'SPYGLASS') AnimationUtils.bobModelPart(this, this.rightArm, state.ageInTicks, 1)
-    if (state.leftArmPose !== 'SPYGLASS') AnimationUtils.bobModelPart(this, this.leftArm, state.ageInTicks, -1)
-    if (swimAmount > 0) this.setupSwimAnimation(state, animationPos, swimAmount)
   }
 
   /** HumanoidRenderState.getArmPose */
@@ -245,40 +378,42 @@ export class HumanoidModel extends AnimModel {
     const swingArm = state.currentSwing ? handArm(state.currentSwing.hand, state.mainArm) : undefined
     const rightArmSwimAmount = state.rightArmPose !== 'SPEAR' && swingArm !== 'RIGHT' ? swimAmount : 0
     const leftArmSwimAmount = state.leftArmPose !== 'SPEAR' && swingArm !== 'LEFT' ? swimAmount : 0
-    const quadratic = (x: number) => f(f(-65 * x) + f(x * x))
-    if (!state.isUsingItem) {
-      if (swimPos < 14) {
-        this.leftArm.xRot = rotLerpRad(leftArmSwimAmount, this.leftArm.xRot, 0)
-        this.rightArm.xRot = lerp(rightArmSwimAmount, this.rightArm.xRot, 0)
-        this.leftArm.yRot = rotLerpRad(leftArmSwimAmount, this.leftArm.yRot, PI)
-        this.rightArm.yRot = lerp(rightArmSwimAmount, this.rightArm.yRot, PI)
-        this.leftArm.zRot = rotLerpRad(leftArmSwimAmount, this.leftArm.zRot, f(PI + f(f(f(1.870_796_4) * quadratic(swimPos)) / quadratic(14))))
-        this.rightArm.zRot = lerp(rightArmSwimAmount, this.rightArm.zRot, f(PI - f(f(f(1.870_796_4) * quadratic(swimPos)) / quadratic(14))))
-      } else if (swimPos >= 14 && swimPos < 22) {
-        const internalSwimPos = f(f(swimPos - 14) / 8)
-        this.leftArm.xRot = rotLerpRad(leftArmSwimAmount, this.leftArm.xRot, f(HALF_PI * internalSwimPos))
-        this.rightArm.xRot = lerp(rightArmSwimAmount, this.rightArm.xRot, f(HALF_PI * internalSwimPos))
-        this.leftArm.yRot = rotLerpRad(leftArmSwimAmount, this.leftArm.yRot, PI)
-        this.rightArm.yRot = lerp(rightArmSwimAmount, this.rightArm.yRot, PI)
-        this.leftArm.zRot = rotLerpRad(leftArmSwimAmount, this.leftArm.zRot, f(f(5.012_389) - f(f(1.870_796_4) * internalSwimPos)))
-        this.rightArm.zRot = lerp(rightArmSwimAmount, this.rightArm.zRot, f(f(1.270_796_3) + f(f(1.870_796_4) * internalSwimPos)))
-      } else if (swimPos >= 22 && swimPos < 26) {
-        const internalSwimPos = f(f(swimPos - 22) / 4)
-        this.leftArm.xRot = rotLerpRad(leftArmSwimAmount, this.leftArm.xRot, f(HALF_PI - f(HALF_PI * internalSwimPos)))
-        this.rightArm.xRot = lerp(rightArmSwimAmount, this.rightArm.xRot, f(HALF_PI - f(HALF_PI * internalSwimPos)))
-        this.leftArm.yRot = rotLerpRad(leftArmSwimAmount, this.leftArm.yRot, PI)
-        this.rightArm.yRot = lerp(rightArmSwimAmount, this.rightArm.yRot, PI)
-        this.leftArm.zRot = rotLerpRad(leftArmSwimAmount, this.leftArm.zRot, PI)
-        this.rightArm.zRot = lerp(rightArmSwimAmount, this.rightArm.zRot, PI)
-      }
-    }
+    if (!state.isUsingItem) this.swimArms(swimPos, leftArmSwimAmount, rightArmSwimAmount)
     this.leftLeg.xRot = lerp(swimAmount, this.leftLeg.xRot, f(f(0.3) * cos(f(f(animationPos * f(0.333_333_34)) + PI))))
     this.rightLeg.xRot = lerp(swimAmount, this.rightLeg.xRot, f(f(0.3) * cos(f(animationPos * f(0.333_333_34)))))
   }
 
-  poseArm(state: AnimState, right: boolean) {
+  /** The swimming arm strokes (the !isUsingItem part of the swim animation). */
+  swimArms(swimPos: number, leftArmSwimAmount: number, rightArmSwimAmount: number) {
+    const quadratic = (x: number) => f(f(-65 * x) + f(x * x))
+    if (swimPos < 14) {
+      this.leftArm.xRot = rotLerpRad(leftArmSwimAmount, this.leftArm.xRot, 0)
+      this.rightArm.xRot = lerp(rightArmSwimAmount, this.rightArm.xRot, 0)
+      this.leftArm.yRot = rotLerpRad(leftArmSwimAmount, this.leftArm.yRot, PI)
+      this.rightArm.yRot = lerp(rightArmSwimAmount, this.rightArm.yRot, PI)
+      this.leftArm.zRot = rotLerpRad(leftArmSwimAmount, this.leftArm.zRot, f(PI + f(f(f(1.870_796_4) * quadratic(swimPos)) / quadratic(14))))
+      this.rightArm.zRot = lerp(rightArmSwimAmount, this.rightArm.zRot, f(PI - f(f(f(1.870_796_4) * quadratic(swimPos)) / quadratic(14))))
+    } else if (swimPos >= 14 && swimPos < 22) {
+      const internalSwimPos = f(f(swimPos - 14) / 8)
+      this.leftArm.xRot = rotLerpRad(leftArmSwimAmount, this.leftArm.xRot, f(HALF_PI * internalSwimPos))
+      this.rightArm.xRot = lerp(rightArmSwimAmount, this.rightArm.xRot, f(HALF_PI * internalSwimPos))
+      this.leftArm.yRot = rotLerpRad(leftArmSwimAmount, this.leftArm.yRot, PI)
+      this.rightArm.yRot = lerp(rightArmSwimAmount, this.rightArm.yRot, PI)
+      this.leftArm.zRot = rotLerpRad(leftArmSwimAmount, this.leftArm.zRot, f(f(5.012_389) - f(f(1.870_796_4) * internalSwimPos)))
+      this.rightArm.zRot = lerp(rightArmSwimAmount, this.rightArm.zRot, f(f(1.270_796_3) + f(f(1.870_796_4) * internalSwimPos)))
+    } else if (swimPos >= 22 && swimPos < 26) {
+      const internalSwimPos = f(f(swimPos - 22) / 4)
+      this.leftArm.xRot = rotLerpRad(leftArmSwimAmount, this.leftArm.xRot, f(HALF_PI - f(HALF_PI * internalSwimPos)))
+      this.rightArm.xRot = lerp(rightArmSwimAmount, this.rightArm.xRot, f(HALF_PI - f(HALF_PI * internalSwimPos)))
+      this.leftArm.yRot = rotLerpRad(leftArmSwimAmount, this.leftArm.yRot, PI)
+      this.rightArm.yRot = lerp(rightArmSwimAmount, this.rightArm.yRot, PI)
+      this.leftArm.zRot = rotLerpRad(leftArmSwimAmount, this.leftArm.zRot, PI)
+      this.rightArm.zRot = lerp(rightArmSwimAmount, this.rightArm.zRot, PI)
+    }
+  }
+
+  poseArm(state: AnimState, right: boolean, pose: string = right ? state.rightArmPose : state.leftArmPose) {
     const arm = right ? this.rightArm : this.leftArm
-    const pose = right ? state.rightArmPose : state.leftArmPose
     const side = right ? 'RIGHT' : 'LEFT'
     switch (pose) {
       case 'EMPTY':
@@ -303,6 +438,7 @@ export class HumanoidModel extends AnimModel {
         this.leftArm.xRot = f(-HALF_PI + this.head.xRot)
         break
       case 'THROW_TRIDENT':
+      case 'THROW_SPEAR':
         arm.xRot = f(f(arm.xRot * 0.5) - PI)
         arm.yRot = 0
         break
@@ -348,12 +484,27 @@ export class HumanoidModel extends AnimModel {
     arm.yRot = f(f((right ? -30 : 30) * DEG_TO_RAD) + clamp(this.head.yRot, f(-0.523_598_8), f(0.523_598_8)))
   }
 
+  /**
+   * 26.3: the current swing (its hand and animation type) at swingAnimation. Before: attackTime on attackArm, a whack
+   * (1.21.11 - 26.2: the main hand item's swingAnimationType).
+   */
   setupAttackAnimation(state: AnimState) {
     const { sin, cos, ease } = this.c
-    const swingAnimation = state.swingAnimation as number
-    const swing = state.currentSwing as { hand: string; animation: { type: string } } | null
-    if (swingAnimation <= 0 || !swing) return
-    const swingArm = handArm(swing.hand, state.mainArm)
+    let swingAnimation: number
+    let swingArm: string
+    let type: string
+    if (this.c.atLeast('26.3')) {
+      swingAnimation = state.swingAnimation as number
+      const swing = state.currentSwing as { hand: string; animation: { type: string } } | null
+      if (swingAnimation <= 0 || !swing) return
+      swingArm = handArm(swing.hand, state.mainArm)
+      type = swing.animation.type
+    } else {
+      swingAnimation = (state.attackTime ?? 0) as number
+      if (swingAnimation <= 0) return
+      swingArm = state.attackArm
+      type = this.c.atLeast('1.21.11') ? (state.swingAnimationType ?? 'WHACK') : 'WHACK'
+    }
     this.body.yRot = f(sin(f(f(Math.sqrt(swingAnimation)) * f(6.283_185_5))) * f(0.2))
     if (swingArm === 'LEFT') this.body.yRot = f(this.body.yRot * -1)
     const ageScale = state.ageScale as number
@@ -364,8 +515,9 @@ export class HumanoidModel extends AnimModel {
     this.rightArm.yRot = f(this.rightArm.yRot + this.body.yRot)
     this.leftArm.yRot = f(this.leftArm.yRot + this.body.yRot)
     this.leftArm.xRot = f(this.leftArm.xRot + this.body.yRot)
-    switch (swing.animation.type) {
+    switch (type) {
       case 'WHACK': {
+        // Ease.outQuart, or (before 1.21.11) the same 1 - (1 - t)^4 written out
         const aa = sin(f(ease.outQuart(swingAnimation) * PI))
         const bb = f(f(f(sin(f(swingAnimation * PI)) * -f(this.head.xRot - f(0.7))) * f(0.75)))
         const attackArm = this.getArm(swingArm)
@@ -381,15 +533,53 @@ export class HumanoidModel extends AnimModel {
   }
 }
 
+/**
+ * ZombieModel (and GiantZombieModel, ZombieVillagerModel: same code). 26.3 poses the arms in setupAttackAnimation;
+ * before (AbstractZombieModel) after the whole humanoid setupAnim.
+ */
 export class ZombieModel extends HumanoidModel {
+  override setupAnim(state: AnimState) {
+    super.setupAnim(state)
+    if (!this.c.atLeast('26.3')) AnimationUtils.animateZombieArmsLegacy(this, this.leftArm, this.rightArm, state.isAggressive, state)
+  }
+
   override setupAttackAnimation(state: AnimState) {
     super.setupAttackAnimation(state)
-    AnimationUtils.animateZombieArms(this, this.leftArm, this.rightArm, state.isAggressive, state)
+    if (this.c.atLeast('26.3')) AnimationUtils.animateZombieArms(this, this.leftArm, this.rightArm, state.isAggressive, state)
   }
 }
 
+/**
+ * DrownedModel. Before 26.3 it adds its trident pose and its swimming on top of the humanoid (and zombie) pose; 26.3
+ * replaces the humanoid swim animation. Before 1.21.4 its own getArmPose throws a trident held in the main hand by an
+ * aggressive drowned (`state.isHoldingTrident`, optional: the main hand item is a trident, 1.21.2 / 1.21.3 only).
+ */
 export class DrownedModel extends ZombieModel {
+  override setupAnim(state: AnimState) {
+    super.setupAnim(state)
+    if (this.c.atLeast('26.3')) return
+    if (isThrowTrident(this.legacyArmPose(state, 'LEFT'))) {
+      this.leftArm.xRot = f(f(this.leftArm.xRot * 0.5) - PI)
+      this.leftArm.yRot = 0
+    }
+    if (isThrowTrident(this.legacyArmPose(state, 'RIGHT'))) {
+      this.rightArm.xRot = f(f(this.rightArm.xRot * 0.5) - PI)
+      this.rightArm.yRot = 0
+    }
+    const swimAmount = state.swimAmount as number
+    if (swimAmount > 0) this.drownedSwim(state, swimAmount)
+  }
+
+  override legacyArmPose(state: AnimState, arm: string): string {
+    if (this.c.atLeast('1.21.4')) return super.legacyArmPose(state, arm)
+    return state.isHoldingTrident && state.isAggressive && state.mainArm === arm ? 'THROW_SPEAR' : 'EMPTY'
+  }
+
   override setupSwimAnimation(state: AnimState, _animationPos: number, swimAmount: number) {
+    this.drownedSwim(state, swimAmount)
+  }
+
+  drownedSwim(state: AnimState, swimAmount: number) {
     const { sin } = this.c
     const wave = sin(f(f(0.1) * state.ageInTicks))
     this.rightArm.xRot = f(rotLerpRad(swimAmount, this.rightArm.xRot, f(-2.513_274_2)) + f(f(swimAmount * f(0.35)) * wave))
@@ -402,12 +592,13 @@ export class DrownedModel extends ZombieModel {
   }
 }
 
+/** SkeletonModel. Before 1.21.4 its getArmPose draws the bow of an aggressive skeleton holding one in the main hand. */
 export class SkeletonModel extends HumanoidModel {
   override setupAnim(state: AnimState) {
     super.setupAnim(state)
     if (state.isAggressive && !state.isHoldingBow) {
       const { sin } = this.c
-      const swingAnimation = state.swingAnimation as number
+      const swingAnimation = this.attackTime(state)
       const swing2 = sin(f(swingAnimation * PI))
       const swing = sin(f(f(1 - f(f(1 - swingAnimation) * f(1 - swingAnimation))) * PI))
       this.rightArm.zRot = 0
@@ -420,6 +611,11 @@ export class SkeletonModel extends HumanoidModel {
       this.leftArm.xRot = f(this.leftArm.xRot - f(f(swing2 * f(1.2)) - f(swing * f(0.4))))
       AnimationUtils.bobArms(this, this.rightArm, this.leftArm, state.ageInTicks)
     }
+  }
+
+  override legacyArmPose(state: AnimState, arm: string): string {
+    if (this.c.atLeast('1.21.4')) return super.legacyArmPose(state, arm)
+    return state.isHoldingBow && state.isAggressive && state.mainArm === arm ? 'BOW_AND_ARROW' : 'EMPTY'
   }
 }
 
@@ -454,7 +650,7 @@ export class PiglinModel extends AbstractPiglinModel {
   override setupAnim(state: AnimState) {
     super.setupAnim(state)
     const { sin, cos } = this.c
-    const swingAnimation = state.swingAnimation as number
+    const swingAnimation = this.attackTime(state)
     const pose = state.armPose as string
     if (pose === 'DANCING') {
       const dancePos = f(state.ageInTicks / 60)
@@ -488,7 +684,7 @@ export class PiglinModel extends AbstractPiglinModel {
   }
 
   override setupAttackAnimation(state: AnimState) {
-    const swingAnimation = state.swingAnimation as number
+    const swingAnimation = this.attackTime(state)
     if (swingAnimation > 0 && state.armPose === 'ATTACKING_WITH_MELEE_WEAPON') {
       AnimationUtils.swingWeaponDown(this, this.rightArm, this.leftArm, state.mainArm, swingAnimation, state.ageInTicks)
     } else {
@@ -501,10 +697,16 @@ export class BabyPiglinModel extends PiglinModel {
   override defaultEarAngleInDegrees = 5
 }
 
+/** ZombifiedPiglinModel: zombie arms in setupAttackAnimation (26.3), after the whole setupAnim before. */
 export class ZombifiedPiglinModel extends AbstractPiglinModel {
+  override setupAnim(state: AnimState) {
+    super.setupAnim(state)
+    if (!this.c.atLeast('26.3')) AnimationUtils.animateZombieArmsLegacy(this, this.leftArm, this.rightArm, state.isAggressive, state)
+  }
+
   override setupAttackAnimation(state: AnimState) {
     super.setupAttackAnimation(state)
-    AnimationUtils.animateZombieArms(this, this.leftArm, this.rightArm, state.isAggressive, state)
+    if (this.c.atLeast('26.3')) AnimationUtils.animateZombieArms(this, this.leftArm, this.rightArm, state.isAggressive, state)
   }
 }
 
@@ -514,6 +716,8 @@ export class BabyZombifiedPiglinModel extends ZombifiedPiglinModel {
 
 export const HUMANOID_MODELS = {
   HumanoidModel,
+  // 1.21.2 - 1.21.8: the armor layers' model (HumanoidModel's code)
+  HumanoidArmorModel: HumanoidModel,
   ZombieModel,
   BabyZombieModel: ZombieModel,
   GiantZombieModel: ZombieModel,
@@ -523,6 +727,9 @@ export const HUMANOID_MODELS = {
   BabyDrownedModel: DrownedModel,
   SkeletonModel,
   BoggedModel,
+  // before 26.1 there is one PiglinModel / ZombifiedPiglinModel class for adults and babies (30 degree ears)
+  PiglinModel,
+  ZombifiedPiglinModel,
   AdultPiglinModel: PiglinModel,
   BabyPiglinModel,
   AdultZombifiedPiglinModel: ZombifiedPiglinModel,

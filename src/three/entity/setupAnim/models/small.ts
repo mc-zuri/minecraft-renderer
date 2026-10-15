@@ -3,7 +3,8 @@ import { DEG_TO_RAD, HALF_PI, PI, f, lerp, rotLerp, rotLerpRad } from '../mth'
 import { applyAnimationState, applyWalkAnimation } from '../keyframes'
 
 /**
- * Small animals and flyers (wolves, felines, foxes, rabbits, chickens, parrots, bats, bees, allays, vexes), 26.3.
+ * Small animals and flyers (wolves, felines, foxes, rabbits, chickens, parrots, bats, bees, allays, vexes), 26.3, and
+ * the 1.21.2 - 1.21.11 classes (one model class for adults and babies then: WolfModel, CatModel, FoxModel...).
  */
 
 /** WolfRenderState.getBodyRollAngle */
@@ -74,6 +75,7 @@ export class WolfModel extends AnimModel {
   }
 }
 
+/** Also 1.21.2 - 1.21.11's WolfModel (adults and babies), the same code but for the sitting upper body offset. */
 export class AdultWolfModel extends WolfModel {
   realHead = this.part('real_head')
   upperBody = this.part('upper_body')
@@ -81,7 +83,8 @@ export class AdultWolfModel extends WolfModel {
 
   override setSittingPose(state: AnimState) {
     super.setSittingPose(state)
-    this.upperBody.y = f(this.upperBody.y + 2)
+    // 1.21.x's WolfModel: 2 * ageScale
+    this.upperBody.y = f(this.upperBody.y + (this.c.atLeast('26.1') ? 2 : f(2 * (state.ageScale as number))))
     this.upperBody.xRot = f(1.256_637_1)
     this.upperBody.yRot = 0
   }
@@ -162,11 +165,13 @@ export class AbstractFelineModel extends AnimModel {
   }
 }
 
+/** Also 1.21.2 - 1.21.11's FelineModel (CatModel, OcelotModel; adults and babies). */
 export class AdultFelineModel extends AbstractFelineModel {
   override setupAnim(state: AnimState) {
     super.setupAnim(state)
     const ageScale = state.ageScale as number
-    this.setupCrouchSprintAndHead(state, ageScale)
+    // before 1.21.4 the crouching / sprinting offsets don't scale with ageScale
+    this.setupCrouchSprintAndHead(state, this.c.atLeast('1.21.4') ? ageScale : 1)
     if (!state.isSitting) {
       this.body.xRot = HALF_PI
       this.setupWalk(state)
@@ -456,6 +461,106 @@ export class BabyFoxModel extends FoxModel {
   }
 }
 
+/** 1.21.2 - 1.21.11 FoxModel (adults and babies). */
+export class LegacyFoxModel extends AnimModel {
+  head = this.part('head')
+  body = this.part('body')
+  rightHindLeg = this.part('right_hind_leg')
+  leftHindLeg = this.part('left_hind_leg')
+  rightFrontLeg = this.part('right_front_leg')
+  leftFrontLeg = this.part('left_front_leg')
+  tail = this.part('body/tail')
+  /** the model instance's own counter (a field of the Java model), advanced every frame a fox is faceplanted */
+  legMotionPos = 0
+
+  override setupAnim(state: AnimState) {
+    super.setupAnim(state)
+    const { cos } = this.c
+    const animationSpeed = state.walkAnimationSpeed as number
+    const animationPos = state.walkAnimationPos as number
+    this.rightHindLeg.xRot = f(f(cos(f(animationPos * f(0.6662))) * f(1.4)) * animationSpeed)
+    this.leftHindLeg.xRot = f(f(cos(f(f(animationPos * f(0.6662)) + PI)) * f(1.4)) * animationSpeed)
+    this.rightFrontLeg.xRot = f(f(cos(f(f(animationPos * f(0.6662)) + PI)) * f(1.4)) * animationSpeed)
+    this.leftFrontLeg.xRot = f(f(cos(f(animationPos * f(0.6662))) * f(1.4)) * animationSpeed)
+    this.head.zRot = state.headRollAngle
+    this.rightHindLeg.visible = true
+    this.leftHindLeg.visible = true
+    this.rightFrontLeg.visible = true
+    this.leftFrontLeg.visible = true
+    const ageScale = state.ageScale as number
+    if (state.isCrouching) {
+      this.body.xRot = f(this.body.xRot + f(0.104_719_76))
+      const crouch = state.crouchAmount as number
+      this.body.y = f(this.body.y + f(crouch * ageScale))
+      this.head.y = f(this.head.y + f(crouch * ageScale))
+    } else if (state.isSleeping) {
+      this.body.zRot = -HALF_PI
+      this.body.y = f(this.body.y + f(5 * ageScale))
+      this.tail.xRot = f(-2.617_993_8)
+      if (state.isBaby) {
+        this.tail.xRot = f(-2.181_661_6)
+        this.body.z = f(this.body.z + 2)
+      }
+      this.head.x = f(this.head.x + f(2 * ageScale))
+      this.head.y = f(this.head.y + f(f(2.99) * ageScale))
+      this.head.yRot = f(-2.094_395_2)
+      this.head.zRot = 0
+      this.rightHindLeg.visible = false
+      this.leftHindLeg.visible = false
+      this.rightFrontLeg.visible = false
+      this.leftFrontLeg.visible = false
+    } else if (state.isSitting) {
+      this.body.xRot = f(0.523_598_8)
+      this.body.y = f(this.body.y - f(7 * ageScale))
+      this.body.z = f(this.body.z + f(3 * ageScale))
+      this.tail.xRot = f(0.785_398_2)
+      this.tail.z = f(this.tail.z - f(1 * ageScale))
+      this.head.xRot = 0
+      this.head.yRot = 0
+      if (state.isBaby) {
+        // the decompiled source says --head.y; the bytecode subtracts 1.75
+        this.head.y = f(this.head.y - f(1.75))
+        this.head.z = f(this.head.z - f(0.375))
+      } else {
+        this.head.y = f(this.head.y - f(6.5))
+        this.head.z = f(this.head.z + f(2.75))
+      }
+      this.rightHindLeg.xRot = f(-1.308_996_9)
+      this.rightHindLeg.y = f(this.rightHindLeg.y + f(4 * ageScale))
+      this.rightHindLeg.z = f(this.rightHindLeg.z - f(f(0.25) * ageScale))
+      this.leftHindLeg.xRot = f(-1.308_996_9)
+      this.leftHindLeg.y = f(this.leftHindLeg.y + f(4 * ageScale))
+      this.leftHindLeg.z = f(this.leftHindLeg.z - f(f(0.25) * ageScale))
+      this.rightFrontLeg.xRot = f(-0.261_799_4)
+      this.leftFrontLeg.xRot = f(-0.261_799_4)
+    }
+    if (!state.isSleeping && !state.isFaceplanted && !state.isCrouching) {
+      this.head.xRot = f(state.xRot * DEG_TO_RAD)
+      this.head.yRot = f(state.yRot * DEG_TO_RAD)
+    }
+    if (state.isSleeping) {
+      this.head.xRot = 0
+      this.head.yRot = f(-2.094_395_2)
+      this.head.zRot = f(cos(f(state.ageInTicks * f(0.027))) / 22)
+    }
+    if (state.isCrouching) {
+      const wiggleAmount = f(cos(state.ageInTicks) * f(0.01))
+      this.body.yRot = wiggleAmount
+      this.rightHindLeg.zRot = wiggleAmount
+      this.leftHindLeg.zRot = wiggleAmount
+      this.rightFrontLeg.zRot = f(wiggleAmount / 2)
+      this.leftFrontLeg.zRot = f(wiggleAmount / 2)
+    }
+    if (state.isFaceplanted) {
+      this.legMotionPos = f(this.legMotionPos + f(0.67))
+      this.rightHindLeg.xRot = f(cos(f(this.legMotionPos * f(0.4662))) * f(0.1))
+      this.leftHindLeg.xRot = f(cos(f(f(this.legMotionPos * f(0.4662)) + PI)) * f(0.1))
+      this.rightFrontLeg.xRot = f(cos(f(f(this.legMotionPos * f(0.4662)) + PI)) * f(0.1))
+      this.leftFrontLeg.xRot = f(cos(f(this.legMotionPos * f(0.4662))) * f(0.1))
+    }
+  }
+}
+
 export class RabbitModel extends AnimModel {
   head = this.part('body/head')
   hopAnimation = 'RabbitAnimation.HOP'
@@ -478,6 +583,51 @@ export class AdultRabbitModel extends RabbitModel {}
 export class BabyRabbitModel extends RabbitModel {
   override hopAnimation = 'BabyRabbitAnimation.HOP'
   override idleHeadTiltAnimation = 'BabyRabbitAnimation.IDLE_HEAD_TILT'
+}
+
+/**
+ * 1.21.2 - 1.21.11 RabbitModel (adults and babies). 1.21.4 made the ears and nose children of the head and the hind feet
+ * children of the haunches, and the jump adds to the haunches' and front legs' initial rotation.
+ */
+export class LegacyRabbitModel extends AnimModel {
+  head = this.part('head')
+  leftHaunch = this.part('left_haunch')
+  rightHaunch = this.part('right_haunch')
+  leftFrontLeg = this.part('left_front_leg')
+  rightFrontLeg = this.part('right_front_leg')
+
+  override setupAnim(state: AnimState) {
+    super.setupAnim(state)
+    const { sin } = this.c
+    if (this.c.atLeast('1.21.4')) {
+      this.head.xRot = f(state.xRot * DEG_TO_RAD)
+      this.head.yRot = f(state.yRot * DEG_TO_RAD)
+      const jumpRotation = sin(f(state.jumpCompletion * PI))
+      this.leftHaunch.xRot = f(this.leftHaunch.xRot + f(f(jumpRotation * 50) * DEG_TO_RAD))
+      this.rightHaunch.xRot = f(this.rightHaunch.xRot + f(f(jumpRotation * 50) * DEG_TO_RAD))
+      this.leftFrontLeg.xRot = f(this.leftFrontLeg.xRot + f(f(jumpRotation * -40) * DEG_TO_RAD))
+      this.rightFrontLeg.xRot = f(this.rightFrontLeg.xRot + f(f(jumpRotation * -40) * DEG_TO_RAD))
+    } else {
+      const nose = this.part('nose')
+      const rightEar = this.part('right_ear')
+      const leftEar = this.part('left_ear')
+      nose.xRot = f(state.xRot * DEG_TO_RAD)
+      this.head.xRot = f(state.xRot * DEG_TO_RAD)
+      rightEar.xRot = f(state.xRot * DEG_TO_RAD)
+      leftEar.xRot = f(state.xRot * DEG_TO_RAD)
+      nose.yRot = f(state.yRot * DEG_TO_RAD)
+      this.head.yRot = f(state.yRot * DEG_TO_RAD)
+      rightEar.yRot = f(nose.yRot - f(0.261_799_4))
+      leftEar.yRot = f(nose.yRot + f(0.261_799_4))
+      const jumpRotation = sin(f(state.jumpCompletion * PI))
+      this.leftHaunch.xRot = f(f(f(jumpRotation * 50) - 21) * DEG_TO_RAD)
+      this.rightHaunch.xRot = f(f(f(jumpRotation * 50) - 21) * DEG_TO_RAD)
+      this.part('left_hind_foot').xRot = f(f(jumpRotation * 50) * DEG_TO_RAD)
+      this.part('right_hind_foot').xRot = f(f(jumpRotation * 50) * DEG_TO_RAD)
+      this.leftFrontLeg.xRot = f(f(f(jumpRotation * -40) - 11) * DEG_TO_RAD)
+      this.rightFrontLeg.xRot = f(f(f(jumpRotation * -40) - 11) * DEG_TO_RAD)
+    }
+  }
 }
 
 export class ChickenModel extends AnimModel {
@@ -509,7 +659,21 @@ export class AdultChickenModel extends ChickenModel {
   }
 }
 
-const PARROT_POSES = new Set(['FLYING', 'STANDING', 'SITTING', 'PARTY', 'ON_SHOULDER'])
+/** 1.21.2 - 1.21.11 ChickenModel (adults and babies); before 1.21.4 the beak and wattle are root parts turned like the head. */
+export class LegacyChickenModel extends AdultChickenModel {
+  override setupAnim(state: AnimState) {
+    super.setupAnim(state)
+    if (!this.c.atLeast('1.21.4')) {
+      for (const name of ['beak', 'red_thing']) {
+        const part = this.part(name)
+        part.xRot = this.head.xRot
+        part.yRot = this.head.yRot
+      }
+    }
+  }
+}
+
+const PARROT_POSES =new Set(['FLYING', 'STANDING', 'SITTING', 'PARTY', 'ON_SHOULDER'])
 
 /**
  * ParrotRenderState.pose (a ParrotModel.Pose) hides LivingEntityRenderState.pose (the entity's Pose) under the same name,
@@ -802,5 +966,13 @@ export const SMALL_MODELS: Record<string, AnimModelClass> = {
   AdultBeeModel,
   BabyBeeModel: BeeModel,
   AllayModel,
-  VexModel
+  VexModel,
+  // 1.21.2 - 1.21.11
+  WolfModel: AdultWolfModel,
+  CatModel: AdultFelineModel,
+  OcelotModel: AdultFelineModel,
+  FoxModel: LegacyFoxModel,
+  RabbitModel: LegacyRabbitModel,
+  ChickenModel: LegacyChickenModel,
+  BeeModel: AdultBeeModel
 }

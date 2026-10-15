@@ -429,11 +429,16 @@ export const AQUATIC_MODELS: Record<string, AnimModelClass> = {
   PufferfishSmallModel,
   TropicalFishLargeModel,
   TropicalFishSmallModel,
+  // before 1.21.11: the small and large tropical fish models, the same code
+  TropicalFishModelA: TropicalFishSmallModel,
+  TropicalFishModelB: TropicalFishLargeModel,
   DolphinModel,
   SquidModel,
   GuardianModel,
   AdultAxolotlModel,
   BabyAxolotlModel,
+  // before 26.1: one model for adults and babies, the same code as AdultAxolotlModel
+  AxolotlModel: AdultAxolotlModel,
   FrogModel,
   TadpoleModel,
   NautilusModel,

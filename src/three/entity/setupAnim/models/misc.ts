@@ -130,6 +130,70 @@ export class VillagerModel extends AnimModel {
 }
 
 /**
+ * AnimationUtils.animateZombieArms as IllagerModel calls it before 26.3 (bobArms included), per version:
+ * - 1.21.2 - 1.21.10: (attackAnim, ageInTicks) arguments;
+ * - 1.21.11: the state's attackTime, no swing while swingAnimationType is STAB;
+ * - 26.1: as 1.21.11, all of it (bobbing too) only while not a baby holding something;
+ * - 26.2: a baby holding something swings its arms down (raiseArms), the attack sums in one expression.
+ */
+function illagerZombieArms(m: AnimModel, leftArm: PartPose, rightArm: PartPose, aggressive: boolean, state: AnimState) {
+  const { sin } = m.c
+  if (!m.c.atLeast('1.21.11')) {
+    const attackTime = state.attackAnim as number
+    const attack2 = sin(f(attackTime * PI))
+    const attack = sin(f(f(1 - f(f(1 - attackTime) * f(1 - attackTime))) * PI))
+    rightArm.zRot = 0
+    leftArm.zRot = 0
+    rightArm.yRot = -f(f(0.1) - f(attack2 * f(0.6)))
+    leftArm.yRot = f(f(0.1) - f(attack2 * f(0.6)))
+    const armDrop = f(-PI / (aggressive ? 1.5 : 2.25))
+    rightArm.xRot = armDrop
+    leftArm.xRot = armDrop
+    rightArm.xRot = f(rightArm.xRot + f(f(attack2 * f(1.2)) - f(attack * f(0.4))))
+    leftArm.xRot = f(leftArm.xRot + f(f(attack2 * f(1.2)) - f(attack * f(0.4))))
+    AnimationUtils.bobArms(m, rightArm, leftArm, state.ageInTicks)
+    return
+  }
+  const animateAttack = state.swingAnimationType !== 'STAB'
+  if (m.c.atLeast('26.2')) {
+    if (animateAttack) {
+      const raiseArms = !state.isBaby || !state.mainHandItem
+      const armDrop = raiseArms ? f(-PI / (aggressive ? 1.5 : 2.25)) : 0
+      const attackTime = state.attackTime as number
+      const attackYRotModifier = f((raiseArms ? 1 : -1) * sin(f(attackTime * PI)))
+      const attackXRotModifier = sin(f(f(1 - f(f(1 - attackTime) * f(1 - attackTime))) * PI))
+      const xRot = f(f(armDrop + f(attackYRotModifier * f(1.2))) - f(attackXRotModifier * f(0.4)))
+      const yRot = f(f(0.1) - f(attackYRotModifier * f(0.6)))
+      rightArm.xRot = xRot
+      rightArm.yRot = raiseArms ? -yRot : yRot
+      rightArm.zRot = 0
+      leftArm.xRot = xRot
+      leftArm.yRot = raiseArms ? yRot : -yRot
+      leftArm.zRot = 0
+    }
+    AnimationUtils.bobArms(m, rightArm, leftArm, state.ageInTicks)
+    return
+  }
+  // 1.21.11, 26.1
+  if (m.c.atLeast('26.1') && state.isBaby && state.mainHandItem) return
+  if (animateAttack) {
+    const attackTime = state.attackTime as number
+    const armDrop = f(-PI / (aggressive ? 1.5 : 2.25))
+    const attackYRotModifier = sin(f(attackTime * PI))
+    const attackXRotModifier = sin(f(f(1 - f(f(1 - attackTime) * f(1 - attackTime))) * PI))
+    rightArm.zRot = 0
+    rightArm.yRot = -f(f(0.1) - f(attackYRotModifier * f(0.6)))
+    rightArm.xRot = armDrop
+    rightArm.xRot = f(rightArm.xRot + f(f(attackYRotModifier * f(1.2)) - f(attackXRotModifier * f(0.4))))
+    leftArm.zRot = 0
+    leftArm.yRot = f(f(0.1) - f(attackYRotModifier * f(0.6)))
+    leftArm.xRot = armDrop
+    leftArm.xRot = f(leftArm.xRot + f(f(attackYRotModifier * f(1.2)) - f(attackXRotModifier * f(0.4))))
+  }
+  AnimationUtils.bobArms(m, rightArm, leftArm, state.ageInTicks)
+}
+
+/**
  * IllagerModel (evoker, illusioner, pillager, vindicator). Its main hand item (getMainHandItemState / the stack, not in
  * the sampled render state): `state.mainHandItem`, truthy while the main hand holds something (absent = empty).
  */
@@ -183,11 +247,17 @@ export class IllagerModel extends AnimModel {
     }
     const pose = state.armPose as string
     if (pose === 'ATTACKING') {
+      // 26.3: the swing is swingAnimation (attackAnim before), and the arms bob here (in animateZombieArms before)
+      const swing26_3 = this.c.atLeast('26.3')
       if (!state.mainHandItem) {
-        AnimationUtils.animateZombieArms(this, this.leftArm, this.rightArm, true, state)
-        AnimationUtils.bobArms(this, this.rightArm, this.leftArm, state.ageInTicks)
+        if (swing26_3) {
+          AnimationUtils.animateZombieArms(this, this.leftArm, this.rightArm, true, state)
+          AnimationUtils.bobArms(this, this.rightArm, this.leftArm, state.ageInTicks)
+        } else {
+          illagerZombieArms(this, this.leftArm, this.rightArm, true, state)
+        }
       } else {
-        AnimationUtils.swingWeaponDown(this, this.rightArm, this.leftArm, state.mainArm, state.swingAnimation, state.ageInTicks)
+        AnimationUtils.swingWeaponDown(this, this.rightArm, this.leftArm, state.mainArm, swing26_3 ? state.swingAnimation : state.attackAnim, state.ageInTicks)
       }
     } else if (pose === 'SPELLCASTING') {
       this.rightArm.z = 0
@@ -357,32 +427,65 @@ export class CreakingModel extends AnimModel {
   override setupAnim(state: AnimState) {
     super.setupAnim(state)
     const { model, c, root } = this
-    this.head.xRot = f(state.xRot * DEG_TO_RAD)
-    this.head.yRot = f(state.yRot * DEG_TO_RAD)
-    if (state.canMove) applyWalkAnimation(model, c, 'CreakingAnimation.CREAKING_WALK', state.walkAnimationPos, state.walkAnimationSpeed, 1, 1, root)
+    // 1.21.2 - 1.21.3: no head look, a faster walk (5.5, 3), no death animation
+    const v1_21_4 = c.atLeast('1.21.4')
+    if (v1_21_4) {
+      this.head.xRot = f(state.xRot * DEG_TO_RAD)
+      this.head.yRot = f(state.yRot * DEG_TO_RAD)
+    }
+    if (state.canMove) applyWalkAnimation(model, c, 'CreakingAnimation.CREAKING_WALK', state.walkAnimationPos, state.walkAnimationSpeed, v1_21_4 ? 1 : 5.5, v1_21_4 ? 1 : 3, root)
     applyAnimationState(model, c, 'CreakingAnimation.CREAKING_ATTACK', state.attackAnimationState, state.ageInTicks, 1, root)
     applyAnimationState(model, c, 'CreakingAnimation.CREAKING_INVULNERABLE', state.invulnerabilityAnimationState, state.ageInTicks, 1, root)
-    applyAnimationState(model, c, 'CreakingAnimation.CREAKING_DEATH', state.deathAnimationState, state.ageInTicks, 1, root)
+    if (v1_21_4) applyAnimationState(model, c, 'CreakingAnimation.CREAKING_DEATH', state.deathAnimationState, state.ageInTicks, 1, root)
   }
 }
 
 type Rotations = { x: number; y: number; z: number }
 
+/** ArmorStand.DEFAULT_*_POSE, what ArmorStandRenderState's Rotations start as */
+const DEFAULT_ARMOR_STAND_POSES: Record<string, Rotations> = {
+  headPose: { x: 0, y: 0, z: 0 },
+  bodyPose: { x: 0, y: 0, z: 0 },
+  leftArmPose: { x: -10, y: 0, z: -10 },
+  rightArmPose: { x: -15, y: 0, z: 10 },
+  leftLegPose: { x: -1, y: 0, z: -1 },
+  rightLegPose: { x: 1, y: 0, z: 1 }
+}
+
+/**
+ * An ArmorStandRenderState Rotations field ({x, y, z} in degrees). The 1.21.2 - 1.21.4 exports do not record Rotations
+ * (there `leftArmPose` / `rightArmPose` are HumanoidRenderState's arm pose enums instead): a field that is not an
+ * object holds the stand's default pose.
+ */
+export const armorStandPose = (state: AnimState, name: string): Rotations => {
+  const value = state[name]
+  return value && typeof value === 'object' ? (value as Rotations) : DEFAULT_ARMOR_STAND_POSES[name]!
+}
+
+/** The humanoid arm pose enum hidden by ArmorStandRenderState's Rotations field of the same name. */
+const humanoidArmPose = (state: AnimState, name: string) => {
+  const qualified = state[`ArmedEntityRenderState.${name}`] ?? state[`HumanoidRenderState.${name}`]
+  if (typeof qualified === 'string') return qualified
+  const value = state[name]
+  return typeof value === 'string' ? value : 'EMPTY'
+}
+
 /**
  * ArmorStandArmorModel: a HumanoidModel posed by the stand's rotations. ArmorStandRenderState's headPose, bodyPose,
  * leftArmPose, rightArmPose, leftLegPose, rightLegPose are Rotations ({x, y, z} in degrees); its leftArmPose /
- * rightArmPose hide HumanoidRenderState's arm pose enums, which stay EMPTY for an armor stand (its renderer is not a
- * humanoid mob renderer), so the humanoid part of setupAnim sees EMPTY.
+ * rightArmPose hide HumanoidRenderState's (1.21.9+: ArmedEntityRenderState's) arm pose enums, which the export records
+ * as `ArmedEntityRenderState.rightArmPose` etc. (EMPTY in game: an armor stand's renderer is not a humanoid mob
+ * renderer); the humanoid part of setupAnim sees those enums. Same code 1.21.2 - 26.3.
  */
 export class ArmorStandArmorModel extends HumanoidModel {
   override setupAnim(state: AnimState) {
-    super.setupAnim({ ...state, rightArmPose: 'EMPTY', leftArmPose: 'EMPTY' })
-    const headPose = state.headPose as Rotations
-    const bodyPose = state.bodyPose as Rotations
-    const leftArmPose = state.leftArmPose as Rotations
-    const rightArmPose = state.rightArmPose as Rotations
-    const leftLegPose = state.leftLegPose as Rotations
-    const rightLegPose = state.rightLegPose as Rotations
+    super.setupAnim({ ...state, rightArmPose: humanoidArmPose(state, 'rightArmPose'), leftArmPose: humanoidArmPose(state, 'leftArmPose') })
+    const headPose = armorStandPose(state, 'headPose')
+    const bodyPose = armorStandPose(state, 'bodyPose')
+    const leftArmPose = armorStandPose(state, 'leftArmPose')
+    const rightArmPose = armorStandPose(state, 'rightArmPose')
+    const leftLegPose = armorStandPose(state, 'leftLegPose')
+    const rightLegPose = armorStandPose(state, 'rightLegPose')
     this.head.xRot = f(DEG_TO_RAD * headPose.x)
     this.head.yRot = f(DEG_TO_RAD * headPose.y)
     this.head.zRot = f(DEG_TO_RAD * headPose.z)
@@ -417,7 +520,7 @@ export class ArmorStandModel extends ArmorStandArmorModel {
 
   override setupAnim(state: AnimState) {
     super.setupAnim(state)
-    const bodyPose = state.bodyPose as Rotations
+    const bodyPose = armorStandPose(state, 'bodyPose')
     this.basePlate.yRot = f(DEG_TO_RAD * -state.yRot)
     this.leftArm.visible = !!state.showArms
     this.rightArm.visible = !!state.showArms
@@ -620,6 +723,48 @@ export class EndCrystalModel extends AnimModel {
   }
 }
 
+/** ElytraModel (same code 1.21.2 - 26.3): the wings follow the state's elytra rotations. */
+export class ElytraModel extends AnimModel {
+  leftWing = this.part('left_wing')
+  rightWing = this.part('right_wing')
+
+  override setupAnim(state: AnimState) {
+    super.setupAnim(state)
+    this.leftWing.y = state.isCrouching ? 3 : 0
+    this.leftWing.xRot = state.elytraRotX
+    this.leftWing.zRot = state.elytraRotZ
+    this.leftWing.yRot = state.elytraRotY
+    this.rightWing.yRot = -this.leftWing.yRot
+    this.rightWing.y = this.leftWing.y
+    this.rightWing.xRot = this.leftWing.xRot
+    this.rightWing.zRot = -this.leftWing.zRot
+  }
+}
+
+/** EvokerFangsModel (same code 1.21.2 - 26.3). */
+export class EvokerFangsModel extends AnimModel {
+  base = this.part('base')
+  upperJaw = this.part('upper_jaw')
+  lowerJaw = this.part('lower_jaw')
+
+  override setupAnim(state: AnimState) {
+    super.setupAnim(state)
+    const biteProgress = state.biteProgress as number
+    let biteAmount = Math.min(f(biteProgress * 2), 1)
+    biteAmount = f(1 - f(f(biteAmount * biteAmount) * biteAmount))
+    this.upperJaw.zRot = f(PI - f(f(biteAmount * f(0.35)) * PI))
+    this.lowerJaw.zRot = f(PI + f(f(biteAmount * f(0.35)) * PI))
+    this.base.y = f(this.base.y - f(f(biteProgress + this.c.sin(f(biteProgress * f(2.7)))) * f(7.2)))
+    let preScale = 1
+    if (biteProgress > f(0.9)) preScale = f(preScale * f(f(1 - biteProgress) / f(0.1)))
+    const root = this.model.root
+    root.y = f(24 - f(20 * preScale))
+    root.xScale = preScale
+    root.yScale = preScale
+    root.zScale = preScale
+  }
+}
+
 export class WindChargeModel extends AnimModel {
   bone = this.part('bone')
   wind = this.part('wind')
@@ -643,7 +788,10 @@ export const MISC_MODELS: Record<string, AnimModelClass> = {
   WardenModel,
   BreezeModel,
   CreakingModel,
+  ArmorStandArmorModel,
   ArmorStandModel,
+  ElytraModel,
+  EvokerFangsModel,
   ArrowModel,
   BoatModel,
   RaftModel,

@@ -433,6 +433,13 @@ const AWAITING_EXPORT_USER_DATA_KEY = '_awaitingExportedEntityModels'
 /** The overrides an entity was last updated with, to build it again. */
 const LAST_OVERRIDES_USER_DATA_KEY = '_lastEntityOverrides'
 
+/** The max_health attribute of a prismarine entity, when the server sent it. */
+const maxHealthOf = (entity: unknown) => {
+  const attributes = (entity as { attributes?: Record<string, { value?: number }> }).attributes
+  const attribute = attributes?.['minecraft:max_health'] ?? attributes?.['minecraft:generic.max_health'] ?? attributes?.['generic.max_health'] ?? attributes?.['generic.maxHealth']
+  return typeof attribute?.value === 'number' ? attribute.value : undefined
+}
+
 /** The exported model build of an entity mesh: its blocks and items are attached by Entities. */
 const EXPORTED_BUILD_USER_DATA_KEY = '_exportedEntityBuild'
 const EXPORTED_WALK_USER_DATA_KEY = '_exportedEntityWalk'
@@ -1314,8 +1321,26 @@ export class Entities {
     if (animation === 0 || animation === 3) tracker?.swingArm(animation === 0 ? 'MAIN_HAND' : 'OFF_HAND')
   }
 
+  /** The level's game time (world age, ticks) the client last got: entities' animations that count from it read it. */
+  gameTime?: { age: number; at: number }
+
+  setWorldAge(age: number) {
+    this.gameTime = { age: Number(age), at: performance.now() }
+  }
+
+  /** An entity's position and eyes, by network id (what a guardian or a wither looks at). */
+  private entityEyePosition(id: number) {
+    const target = this.entities[id]?.originalEntity ?? (this.playerEntity?.originalEntity.id === id ? this.playerEntity.originalEntity : undefined)
+    const position = target?.position
+    if (!target || !position) return undefined
+    const height = target.height ?? 1.8
+    const eyeHeight = (target as { eyeHeight?: number }).eyeHeight ?? height * 0.85
+    return { x: position.x, y: position.y, z: position.z, eyeY: position.y + eyeHeight, eyeHeight, height }
+  }
+
   /** What the client tick and render state of an exported entity read, from its latest update. */
-  private updateAnimInput(e: SceneEntity, entity: SceneEntity['originalEntity'], meta: Record<string, unknown>) {
+  private updateAnimInput(e: SceneEntity, entity: SceneEntity['originalEntity'], metaByKey: Record<string, unknown>) {
+    let meta = metaByKey
     if (!e.userData[ANIM_TRACKER_USER_DATA_KEY]) e.userData[ANIM_TRACKER_USER_DATA_KEY] = new EntityAnimTracker(entityModelName(entity.name ?? ''), this.worldRenderer.version)
     const previous = e.userData[ANIM_INPUT_USER_DATA_KEY] as EntityAnimInput | undefined
     const array = metadataAsArray(entity.metadata)
@@ -1329,6 +1354,12 @@ export class Entities {
     const slots = ['mainhand', 'offhand', 'feet', 'legs', 'chest', 'head', 'body', 'saddle']
     for (const [index, item] of ((entity as { equipment?: Array<{ name?: string } | null | undefined> }).equipment ?? []).entries()) {
       if (item?.name && slots[index]) equipment[slots[index]] = item.name
+    }
+    // versions minecraft-data has no metadata keys for: the names the export gives the synched data (dataNames)
+    const dataNames = (getExportedEntity(this.worldRenderer.version, entityModelName(entity.name ?? '')) as { dataNames?: Record<string, string> } | undefined)?.dataNames
+    if (dataNames) {
+      meta = { ...meta }
+      for (const [index, key] of Object.entries(dataNames)) if (meta[key] === undefined && data[Number(index)] !== undefined) meta[key] = data[Number(index)]
     }
     const customName = typeof meta.custom_name === 'string' ? meta.custom_name : undefined
     e.userData[ANIM_INPUT_USER_DATA_KEY] = {
@@ -1345,7 +1376,15 @@ export class Entities {
       isPassenger: !!(entity as { vehicle?: unknown }).vehicle || e.userData._passengerVehicleId != null || e.userData._boatPassengerVehicleId != null,
       equipment,
       customName,
-      renderHints: e.userData.renderHints as EntityAnimInput['renderHints']
+      renderHints: e.userData.renderHints as EntityAnimInput['renderHints'],
+      entityId: typeof entity.id === 'number' ? entity.id : Number(entity.id),
+      velocity: (entity as { velocity?: { x: number; y: number; z: number } }).velocity,
+      isVehicle: !!(((e.userData.renderHints as EntityAnimInput['renderHints'])?.passengerIds?.length ?? 0) > 0 || (entity as { passengers?: unknown[] }).passengers?.length),
+      maxHealth: maxHealthOf(entity),
+      isInWater: (entity as { isInWater?: boolean }).isInWater ?? (e.userData.renderHints as { isInWater?: boolean } | undefined)?.isInWater,
+      gameTime: this.gameTime ? this.gameTime.age + Math.floor((performance.now() - this.gameTime.at) / 50) : undefined,
+      lookupEntity: id => this.entityEyePosition(id),
+      cameraEyePosition: this.worldRenderer.cameraWorldPos
     } satisfies EntityAnimInput
   }
 

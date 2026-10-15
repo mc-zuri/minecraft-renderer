@@ -5,7 +5,7 @@ import { createRequire } from 'module'
 import { beforeAll, describe, expect, test, vi } from 'vitest'
 import type { EntityModelPart } from 'mc-assets/dist/entityModels'
 import { getEntityModelsStore, loadEntityModels, setEntityModelsSource } from '../exportedEntityModels'
-import { ANIM_MODELS, ModelPose, animContext, floatState } from './index'
+import { ModelPose, animContext, animModelsFor, floatState } from './index'
 
 vi.mock('../../threeJsUtils', () => ({ loadThreeJsTextureFromUrlSync: () => ({ promise: new Promise(() => {}) }) }))
 
@@ -22,6 +22,8 @@ type Sampled = {
   entities: string[]
   base: Record<string, unknown>
   initial?: { hidden?: string[]; skipDraw?: string[] }
+  /** entity-era samples: synched data index -> name */
+  dataNames?: Record<string, string>
   samples: Sample[]
 }
 type Fixture = { version: string; models: Record<string, Sampled> }
@@ -48,10 +50,11 @@ const descend = (root: EntityModelPart, part: string | undefined) => {
 export function checkSampled(version: string, sampled: Sampled, limit = 6): string[] {
   const store = getEntityModelsStore(version)!
   const layer = store.getModel(version, sampled.layer)
-  if (!layer) return [`no layer ${sampled.layer}`]
+  // a model the renderer holds but no exported look draws (a powered wither's armor before 1.21.9): nothing to pose
+  if (!layer) return []
   const pose = new ModelPose(descend(layer.root, sampled.part))
   const context = animContext(version, name => store.getAnimation(version, name))
-  const Port = ANIM_MODELS[sampled.modelClass]!
+  const Port = animModelsFor(version)[sampled.modelClass]!
   const model = new Port(pose, context)
   const hidden = new Set(sampled.initial?.hidden ?? [])
   const skipped = new Set(sampled.initial?.skipDraw ?? [])
@@ -62,7 +65,7 @@ export function checkSampled(version: string, sampled: Sampled, limit = 6): stri
       part.skipDraw = skipped.has(part.path)
     }
     try {
-      model.setupAnim(floatState({ ...sampled.base, ...sample.in }))
+      model.setupAnim(floatState({ ...sampled.base, ...sample.in, dataNames: sampled.dataNames ?? {} }))
     } catch (err) {
       problems.push(`sample ${index} ${JSON.stringify(sample.in)}: ${(err as Error).stack}`)
       if (problems.length >= limit) break
@@ -102,7 +105,7 @@ for (const fixture of fixtures) {
       byClass.get(sampled.modelClass)!.push(sampled)
     }
     for (const [modelClass, sampledList] of [...byClass].sort(([a], [b]) => a.localeCompare(b))) {
-      if (!ANIM_MODELS[modelClass]) {
+      if (!animModelsFor(fixture.version)[modelClass]) {
         test.todo(`${modelClass} (${sampledList.flatMap(s => s.entities).join(', ')})`)
         continue
       }

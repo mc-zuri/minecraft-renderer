@@ -3,7 +3,8 @@ import { DEG_TO_RAD, HALF_PI, PI, clamp, f, lerp } from '../mth'
 import { applyAnimationState, applyStaticAnimation, applyWalkAnimation } from '../keyframes'
 
 /**
- * Horses, donkeys and mules (AbstractEquineModel), camels, sniffers, armadillos and striders, 26.3.
+ * Horses, donkeys and mules (AbstractEquineModel), camels, sniffers, armadillos and striders, 26.3; the 1.21.2 - 1.21.11
+ * code (one class per kind, the baby a scaled adult mesh) branches inside the same classes.
  */
 
 /** AbstractEquineModel */
@@ -16,8 +17,17 @@ export class AbstractEquineModel extends AnimModel {
   rightFrontLeg = this.part('right_front_leg')
   leftFrontLeg = this.part('left_front_leg')
   tail = this.part('tail')
+  // before 1.21.5 the saddle was part of the main model (EquineSaddleModel since)
+  private readonly saddleParts = this.c.atLeast('1.21.5')
+    ? []
+    : ['saddle', 'left_saddle_mouth', 'right_saddle_mouth', 'head_saddle', 'mouth_saddle_wrap'].map(name => this.part(name))
+  private readonly saddledRidingParts = this.c.atLeast('1.21.5') ? [] : [this.part('left_saddle_line'), this.part('right_saddle_line')]
 
   override setupAnim(state: AnimState) {
+    if (!this.c.atLeast('26.1')) {
+      this.setupAnimBefore26_1(state)
+      return
+    }
     super.setupAnim(state)
     const { sin, cos } = this.c
     const clampedYRot = clamp(state.yRot, -20, 20)
@@ -62,6 +72,60 @@ export class AbstractEquineModel extends AnimModel {
     this.offsetLegPositionWhenStanding(standing)
     const ageScale = state.ageScale as number
     this.tail.xRot = f(f(this.getTailXRotOffset() + f(0.523_598_8)) + f(animationSpeed * 0.75))
+    this.tail.y = f(this.tail.y + f(animationSpeed * ageScale))
+    this.tail.z = f(this.tail.z + f(f(animationSpeed * 2) * ageScale))
+    if (animateTail) {
+      this.tail.yRot = cos(f(state.ageInTicks * f(0.7)))
+    } else {
+      this.tail.yRot = 0
+    }
+  }
+
+  /** 1.21.2 - 1.21.11: no per-model hooks, the head and front leg offsets scale with ageScale; the saddle before 1.21.5. */
+  private setupAnimBefore26_1(state: AnimState) {
+    super.setupAnim(state)
+    const { sin, cos } = this.c
+    for (const part of this.saddleParts) part.visible = !!state.isSaddled
+    for (const part of this.saddledRidingParts) part.visible = !!state.isRidden && !!state.isSaddled
+    const clampedYRot = clamp(state.yRot, -20, 20)
+    let headRotXRad = f(state.xRot * DEG_TO_RAD)
+    const animationSpeed = state.walkAnimationSpeed as number
+    const animationPos = state.walkAnimationPos as number
+    if (animationSpeed > f(0.2)) {
+      headRotXRad = f(headRotXRad + f(f(cos(f(animationPos * f(0.8))) * f(0.15)) * animationSpeed))
+    }
+    const eating = state.eatAnimation as number
+    const standing = state.standAnimation as number
+    const iStanding = f(1 - standing)
+    const feedingAnim = state.feedingAnimation as number
+    const animateTail = !!state.animateTail
+    this.headParts.xRot = f(f(0.523_598_8) + headRotXRad)
+    this.headParts.yRot = f(clampedYRot * DEG_TO_RAD)
+    const waterMultiplier = state.isInWater ? f(0.2) : 1
+    const legAnim1 = cos(f(f(f(waterMultiplier * animationPos) * f(0.6662)) + PI))
+    const legXRotAnim = f(f(legAnim1 * f(0.8)) * animationSpeed)
+    const baseHeadAngle = f(f(1 - Math.max(standing, eating)) * f(f(f(0.523_598_8) + headRotXRad) + f(f(feedingAnim * sin(state.ageInTicks)) * f(0.05))))
+    this.headParts.xRot = f(
+      f(f(standing * f(f(0.261_799_4) + headRotXRad)) + f(eating * f(f(2.181_661_6) + f(sin(state.ageInTicks) * f(0.05))))) + baseHeadAngle
+    )
+    this.headParts.yRot = f(f(f(standing * clampedYRot) * DEG_TO_RAD) + f(f(1 - Math.max(standing, eating)) * this.headParts.yRot))
+    const ageScale = state.ageScale as number
+    this.headParts.y = f(this.headParts.y + lerp(eating, lerp(standing, 0, f(-8 * ageScale)), f(7 * ageScale)))
+    this.headParts.z = lerp(standing, this.headParts.z, f(-4 * ageScale))
+    this.body.xRot = f(f(standing * f(-0.785_398_2)) + f(iStanding * this.body.xRot))
+    const standAngle = f(f(0.261_799_4) * standing)
+    const bobValue = cos(f(f(state.ageInTicks * f(0.6)) + PI))
+    this.leftFrontLeg.y = f(this.leftFrontLeg.y - f(f(12 * ageScale) * standing))
+    this.leftFrontLeg.z = f(this.leftFrontLeg.z + f(f(4 * ageScale) * standing))
+    this.rightFrontLeg.y = this.leftFrontLeg.y
+    this.rightFrontLeg.z = this.leftFrontLeg.z
+    const rlegRot = f(f(f(f(-1.047_197_6) + bobValue) * standing) + f(legXRotAnim * iStanding))
+    const llegRot = f(f(f(f(-1.047_197_6) - bobValue) * standing) - f(legXRotAnim * iStanding))
+    this.leftHindLeg.xRot = f(standAngle - f(f(f(legAnim1 * 0.5) * animationSpeed) * iStanding))
+    this.rightHindLeg.xRot = f(standAngle + f(f(f(legAnim1 * 0.5) * animationSpeed) * iStanding))
+    this.leftFrontLeg.xRot = rlegRot
+    this.rightFrontLeg.xRot = llegRot
+    this.tail.xRot = f(f(0.523_598_8) + f(animationSpeed * 0.75))
     this.tail.y = f(this.tail.y + f(animationSpeed * ageScale))
     this.tail.z = f(this.tail.z + f(f(animationSpeed * 2) * ageScale))
     if (animateTail) {
@@ -197,11 +261,15 @@ type CamelAnimations = { walk: string; sit: string; sitPose: string; standup: st
 export abstract class CamelModel extends AnimModel {
   head = this.part('head')
   protected abstract readonly animations: CamelAnimations
+  // before 1.21.5 the saddle was part of the main model (CamelSaddleModel since)
+  private readonly saddleParts = this.c.atLeast('1.21.5') ? [] : [this.part('saddle'), this.part('bridle')]
+  private readonly ridingParts = this.c.atLeast('1.21.5') ? [] : [this.part('reins')]
 
   override setupAnim(state: AnimState) {
     super.setupAnim(state)
     const { model, c, animations } = this
     this.applyHeadRotation(state, state.yRot, state.xRot)
+    if (!c.atLeast('1.21.5')) this.toggleInvisibleParts(state)
     applyWalkAnimation(model, c, animations.walk, state.walkAnimationPos, state.walkAnimationSpeed, 2, 2.5)
     applyAnimationState(model, c, animations.sit, state.sitAnimationState, state.ageInTicks)
     applyAnimationState(model, c, animations.sitPose, state.sitPoseAnimationState, state.ageInTicks)
@@ -219,6 +287,14 @@ export abstract class CamelModel extends AnimModel {
     }
     this.head.yRot = f(yRot * DEG_TO_RAD)
     this.head.xRot = f(xRot * DEG_TO_RAD)
+  }
+
+  /** before 1.21.5 */
+  private toggleInvisibleParts(state: AnimState) {
+    const saddled = !!state.isSaddled
+    const ridden = !!state.isRidden
+    for (const part of this.saddleParts) part.visible = saddled
+    for (const part of this.ridingParts) part.visible = ridden && saddled
   }
 }
 
@@ -275,6 +351,10 @@ export class SnifferModel extends AnimModel {
     applyAnimationState(model, c, 'SnifferAnimation.SNIFFER_STAND_UP', state.risingAnimationState, state.ageInTicks)
     applyAnimationState(model, c, 'SnifferAnimation.SNIFFER_HAPPY', state.feelingHappyAnimationState, state.ageInTicks)
     applyAnimationState(model, c, 'SnifferAnimation.SNIFFER_SNIFFSNIFF', state.scentingAnimationState, state.ageInTicks)
+    // before 26.1 the baby was this model (SniffletModel since)
+    if (!c.atLeast('26.1') && state.isBaby) {
+      applyStaticAnimation(model, c, 'SnifferAnimation.BABY_TRANSFORM')
+    }
   }
 }
 
@@ -317,7 +397,8 @@ export abstract class ArmadilloModel extends AnimModel {
       this.head.xRot = f(clamp(state.xRot, -22.5, 25) * DEG_TO_RAD)
       this.head.yRot = f(clamp(state.yRot, -32.5, 32.5) * DEG_TO_RAD)
     }
-    if (!state.isHidingInShell) {
+    // before 26.1 the walk animation played in the shell too
+    if (!state.isHidingInShell || !c.atLeast('26.1')) {
       applyWalkAnimation(model, c, animations.walk, state.walkAnimationPos, state.walkAnimationSpeed, 16.5, 2.5)
     }
     applyAnimationState(model, c, animations.rollOut, state.rollOutAnimationState, state.ageInTicks)
@@ -439,11 +520,17 @@ export class BabyStriderModel extends StriderModel {
 }
 
 export const EQUINES_MODELS: Record<string, AnimModelClass> = {
+  // 1.21.2 - 1.21.11 HorseModel, DonkeyModel and EquineSaddleModel are the same classes (branching on the version)
   HorseModel,
   BabyHorseModel,
   DonkeyModel,
   BabyDonkeyModel,
   EquineSaddleModel,
+  // 1.21.2 - 1.21.11: CamelModel (adult and baby, the saddle in it before 1.21.5), ArmadilloModel, StriderModel were the
+  // adult models' code (26.1 made them abstract with Adult and Baby subclasses)
+  CamelModel: AdultCamelModel,
+  ArmadilloModel: AdultArmadilloModel,
+  StriderModel: AdultStriderModel,
   AdultCamelModel,
   BabyCamelModel,
   CamelSaddleModel,

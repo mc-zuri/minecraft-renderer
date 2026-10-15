@@ -3,7 +3,8 @@ import { DEG_TO_RAD, HALF_PI, PI, f, lerp, rotLerpRad, triangleWave } from '../m
 
 /**
  * QuadrupedModel and the four-legged animals built on it (cows, pigs, sheep, polar bears, pandas, goats, turtles), plus
- * the other quadrupeds with their own leg code (hoglins, llamas, ravagers), 26.3.
+ * the other quadrupeds with their own leg code (hoglins, llamas, ravagers), 26.3, with the 1.21.2 - 1.21.11 differences
+ * branched on the version (before 26.1 babies were the adult class with a baby flag / baby mesh transformer).
  */
 
 export class QuadrupedModel extends AnimModel {
@@ -62,8 +63,15 @@ export class PolarBearModel extends QuadrupedModel {
     this.leftFrontLeg.y = this.rightFrontLeg.y
     this.leftFrontLeg.z = this.rightFrontLeg.z
     this.leftFrontLeg.xRot = f(this.leftFrontLeg.xRot - f(f(standScale * PI) * f(0.45)))
-    this.head.y = f(this.head.y - f(standScale * 24))
-    this.head.z = f(this.head.z + f(standScale * 13))
+    if (this.c.atLeast('26.1')) {
+      this.head.y = f(this.head.y - f(standScale * 24))
+      this.head.z = f(this.head.z + f(standScale * 13))
+    } else {
+      // before 26.1 (one class for adults and babies): the head's stand offsets shrink for babies
+      const headAgeScale = state.isBaby ? f(0.444_444_45) : 1
+      this.head.y = f(this.head.y - f(f(standScale * headAgeScale) * 24))
+      this.head.z = f(this.head.z + f(f(standScale * headAgeScale) * 13))
+    }
     this.head.xRot = f(this.head.xRot + f(f(standScale * PI) * f(0.15)))
   }
 }
@@ -212,6 +220,12 @@ export class AdultTurtleModel extends TurtleModel {
 
 export class BabyTurtleModel extends TurtleModel {}
 
+/**
+ * TurtleModel before 26.1 (a concrete class for adults and babies, the baby layer is the adult mesh scaled): the
+ * egg belly code that 26.1 moved to AdultTurtleModel, so the same code.
+ */
+export class LegacyTurtleModel extends AdultTurtleModel {}
+
 export class HoglinModel extends AnimModel {
   head = this.part('head')
   rightEar = this.part('head/right_ear')
@@ -231,6 +245,8 @@ export class HoglinModel extends AnimModel {
     this.head.yRot = f(state.yRot * DEG_TO_RAD)
     const headbuttLerpFactor = f(1 - f(Math.abs(10 - 2 * state.attackAnimationRemainingTicks) / 10))
     this.animateHeadbutt(headbuttLerpFactor)
+    // before 26.1 (one class for adults and babies): the baby's headbutt raise, BabyHoglinModel's since
+    if (!this.c.atLeast('26.1') && state.isBaby) this.head.y = f(this.head.y + f(headbuttLerpFactor * 2.5))
     this.rightFrontLeg.xRot = f(f(cos(animationPos) * f(1.2)) * animationSpeed)
     this.leftFrontLeg.xRot = f(f(cos(f(animationPos + PI)) * f(1.2)) * animationSpeed)
     this.rightHindLeg.xRot = this.leftFrontLeg.xRot
@@ -349,6 +365,8 @@ export const QUADRUPEDS_MODELS: Record<string, AnimModelClass> = {
   BabyHoglinModel,
   AdultTurtleModel,
   BabyTurtleModel,
+  // 1.21.x name (abstract in 26.1+, never sampled there)
+  TurtleModel: LegacyTurtleModel,
   LlamaModel,
   BabyLlamaModel: LlamaModel,
   LlamaSpitModel: AnimModel,

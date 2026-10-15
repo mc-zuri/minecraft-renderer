@@ -31,7 +31,7 @@ import {
 } from 'mc-assets/dist/entityModels'
 import { createCanvas } from '../../lib/utils'
 import { loadThreeJsTextureFromUrlSync } from '../threeJsUtils'
-import { ANIM_MODELS, AnimModel, ModelPose, animContext, type AnimState, type PartPose } from './setupAnim'
+import { AnimModel, ModelPose, animContext, animModelsFor, type AnimState, type PartPose } from './setupAnim'
 
 /**
  * Entity models exported from the game (mc-assets' dist/entityModels.json, made by minecraft-model-generator): the
@@ -762,7 +762,7 @@ function linkExportedAnim(
   exportVersion: string
 ) {
   const modelClass = (entry as { modelClass?: string }).modelClass
-  const Port = modelClass ? ANIM_MODELS[modelClass] : undefined
+  const Port = modelClass ? animModelsFor(exportVersion)[modelClass] : undefined
   if (!modelClass || !Port) return
   // models drew themselves part by part before render states (1.21.2): their parts are posed in the whole layer
   const legacy = versionToNumber(exportVersion) < versionToNumber('1.21.2')
