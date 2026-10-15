@@ -92,6 +92,7 @@ import { disposeObject, loadNearestFilterTexture, loadTexture, loadThreeJsTextur
 import { armorModel, armorTextures, elytraTexture } from './entity/armorModels'
 import { ExportedEntityAnimator, applyAnimationOffsets, poseName } from './entity/exportedAnimations'
 import { EntityAnimTracker, entityAnimState, entityEraState, type EntityAnimInput } from './entity/entityAnimState'
+import { thrownItemOf } from './entity/thrownItems'
 import './entity/drivers'
 import { animContext } from './entity/setupAnim'
 import { WorldRendererThree } from './worldRendererThree'
@@ -484,13 +485,6 @@ function exportedItemEntity(version: string, name: string): { item: string; scal
 }
 
 /** Items the renderer shows for item-like entities that older data draws with missing item textures. */
-const ITEM_ENTITY_ITEMS: Record<string, { item: string; scale: number }> = {
-  fireball: { item: 'fire_charge', scale: 3 },
-  small_fireball: { item: 'fire_charge', scale: 0.75 },
-  eye_of_ender: { item: 'ender_eye', scale: 1 },
-  firework_rocket: { item: 'firework_rocket', scale: 1 }
-}
-
 export type SceneEntity = THREE.Object3D & {
   playerObject?: PlayerObjectType
   username?: string
@@ -557,7 +551,7 @@ export class Entities {
         if (!mesh?.userData[AWAITING_EXPORT_USER_DATA_KEY] || !e.originalEntity) continue
         const overrides = e.userData[LAST_OVERRIDES_USER_DATA_KEY] ?? {}
         // an item-like entity (ThrownItemRenderer) is made its item when it spawns: spawned again
-        if (exportedItemEntity(this.worldRenderer.version, e.originalEntity.name)) {
+        if (exportedItemEntity(this.worldRenderer.version, entityModelName(e.originalEntity.name ?? ''))) {
           const entity = e.originalEntity
           this.update({ id: entity.id, delete: true } as SceneEntity['originalEntity'], {})
           this.update(entity, overrides)
@@ -1587,9 +1581,12 @@ export class Entities {
 
       const group = new THREE.Group() as unknown as SceneEntity
       group.originalEntity = entity
-      const itemEntity = exportedItemEntity(this.worldRenderer.version, entity.name) ?? ITEM_ENTITY_ITEMS[entity.name]
+      const itemName = entityModelName(entity.name ?? '')
+      const itemEntity = exportedItemEntity(this.worldRenderer.version, itemName) ?? thrownItemOf(itemName, this.mcData?.itemsByName)
       if (itemEntity) {
-        const object = this.getItemMesh({ name: itemEntity.item }, { 'minecraft:display_context': 'ground' }, true)
+        // the item the entity carries (synched data: a potion's own potion, a firework's own rocket), else its default
+        const carried = metadataAsArray(entity.metadata)?.find((m: any) => typeof m === 'object' && m?.itemCount && (m.itemId !== undefined || m.blockId !== undefined))
+        const object = (carried ? this.getItemMesh(carried, { 'minecraft:display_context': 'ground' }, true) : undefined) ?? this.getItemMesh({ name: itemEntity.item }, { 'minecraft:display_context': 'ground' }, true)
         if (object) {
           mesh = object.mesh
           mesh.scale.multiplyScalar(0.5 * itemEntity.scale)
@@ -1599,13 +1596,7 @@ export class Entities {
       } else if (
         entity.name === 'item' ||
         entity.name === 'tnt' ||
-        entity.name === 'falling_block' ||
-        entity.name === 'snowball' ||
-        entity.name === 'egg' ||
-        entity.name === 'ender_pearl' ||
-        entity.name === 'experience_bottle' ||
-        entity.name === 'splash_potion' ||
-        entity.name === 'lingering_potion'
+        entity.name === 'falling_block'
       ) {
         const item =
           entity.name === 'tnt' || entity.type === 'projectile'
