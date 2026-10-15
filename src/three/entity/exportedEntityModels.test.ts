@@ -31,7 +31,6 @@ import {
   updateExportedHeadAnchor,
   type ExportedPart
 } from './exportedEntityModels'
-import { isBoatEntityName } from './boatModelRotation'
 import reference26 from './fixtures/entityReferenceQuads-26.3.json'
 import reference1214 from './fixtures/entityReferenceQuads-1.21.4.json'
 import reference1204 from './fixtures/entityReferenceQuads-1.20.4.json'
@@ -136,8 +135,7 @@ describe('exported entity models', () => {
       ...(versionNumber(version) < versionNumber('1.15') ? DRAWN_ELSEWHERE_BEFORE_1_15 : {})
     }
     for (const name of allEntities(version)) {
-      // boats keep the OBJ model their paddle, water patch and passenger rigs are made for
-      if (elsewhere[name] || NOT_DRAWN[name] || isBoatEntityName(name)) continue
+      if (elsewhere[name] || NOT_DRAWN[name]) continue
       // paintings: PaintingRenderer's quads from the export, every variant
       if (name === 'painting') {
         const paintings = getEntityModelsStore(version)?.getPaintings(version)
@@ -274,6 +272,42 @@ describe.each([reference26, reference1214, reference1204, reference1144, referen
       }
     })
   }
+})
+
+/** The releases the client plays: minecraft-data's Java releases from 1.8, each read from the export it falls in. */
+const playedVersions = (): string[] => require('minecraft-data').supportedVersions.pc.filter((version: string) => /^\d+\.\d+(\.\d+)?$/.test(version) && versionNumber(version) >= versionNumber('1.8'))
+
+describe('every release the client plays', () => {
+  test.each(playedVersions())('%s: every entity builds meshes from the export it reads, boats too', version => {
+    const elsewhere = {
+      ...DRAWN_ELSEWHERE,
+      ...(versionNumber(version) < versionNumber('1.21.2') ? DRAWN_ELSEWHERE_BEFORE_1_21_2 : {}),
+      ...(versionNumber(version) < versionNumber('1.15') ? DRAWN_ELSEWHERE_BEFORE_1_15 : {})
+    }
+    expect(isEntityModelsVersionCovered(version)).toBe(true)
+    const failed: string[] = []
+    for (const name of allEntities(version)) {
+      if (elsewhere[name] || NOT_DRAWN[name]) continue
+      if (name === 'painting') {
+        if (!buildExportedPainting(version, { variant: 0, direction: 0 })) failed.push('painting: not drawn')
+        continue
+      }
+      if (!entityExportVersionFor(version, name)) {
+        failed.push(`${name}: no export`)
+        continue
+      }
+      const exportedName = resolveExportedEntityName(version, name)
+      const look = composeEntityLook(getExportedEntity(version, exportedName)!)
+      if (look.length === 1 && look[0]!.entry.type === 'item') continue
+      const build = buildExportedEntity(version, exportedName)
+      let vertices = 0
+      build?.object.traverse(child => {
+        if (child instanceof THREE.SkinnedMesh) vertices += child.geometry.getAttribute('position').count
+      })
+      if (!vertices) failed.push(`${name}: no mesh`)
+    }
+    expect(failed).toEqual([])
+  })
 })
 
 describe('cubes like ModelPart.Cube', () => {

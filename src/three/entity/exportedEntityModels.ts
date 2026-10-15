@@ -703,7 +703,10 @@ export function buildExportedEntity(version: string, name: string, input: Export
   object.name = `exported_entity_${name}`
   const rig: ExportedEntityRig = { name, signature: lookSignature(look, input.head), parts: new Map(), armor: !!entity.armor, bones: new Map(), anims: [], holders: [] }
   const result: ExportedEntityBuild = { object, rig, blocks: [], items: [], custom: [] }
-  const context = animContext(version, animation => store.getAnimation(version, animation))
+  // the ported code as of the export the entity is drawn from (a release between two exports reads the older one): its
+  // part names and behavior are that export's, checked against its samples
+  const exportVersion = entityExportVersionFor(version, name) ?? version
+  const context = animContext(exportVersion, animation => store.getAnimation(version, animation))
   for (const { entry } of look) {
     if (entry.type === 'model') {
       const layer = store.getModel(version, entry.model)
@@ -725,7 +728,7 @@ export function buildExportedEntity(version: string, name: string, input: Export
         object.userData.boatWaterPatch = holder
         continue
       }
-      linkExportedAnim(rig, entry, layer, entryParts, context, entityExportVersionFor(version, name) ?? version)
+      linkExportedAnim(rig, entry, layer, entryParts, context, exportVersion)
     } else if (entry.type === 'block') {
       result.blocks.push(entry)
     } else if (entry.type === 'item') {
