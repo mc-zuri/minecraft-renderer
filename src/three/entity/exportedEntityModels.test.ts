@@ -18,6 +18,7 @@ import {
   prismarineToGameHeadAngles,
   type ExportedPart
 } from './exportedEntityModels'
+import { isBoatEntityName } from './boatModelRotation'
 import reference26 from './fixtures/entityReferenceQuads-26.3.json'
 import reference1214 from './fixtures/entityReferenceQuads-1.21.4.json'
 import reference1204 from './fixtures/entityReferenceQuads-1.20.4.json'
@@ -85,7 +86,8 @@ describe('exported entity models', () => {
     const uncovered: string[] = []
     const elsewhere = { ...DRAWN_ELSEWHERE, ...(versionNumber(version) < versionNumber('1.21.2') ? DRAWN_ELSEWHERE_BEFORE_1_21_2 : {}) }
     for (const name of allEntities(version)) {
-      if (elsewhere[name] || NOT_DRAWN[name]) continue
+      // boats keep the OBJ model their paddle, water patch and passenger rigs are made for
+      if (elsewhere[name] || NOT_DRAWN[name] || isBoatEntityName(name)) continue
       const exported = getExportedEntity(version, name)
       if (!exported) {
         uncovered.push(`${name}: not exported`)
