@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { createRequire } from 'module'
 import * as THREE from 'three'
-import { describe, expect, test, vi } from 'vitest'
+import { beforeAll, describe, expect, test, vi } from 'vitest'
 import { composeEntityLook, type EntityModelEntry } from 'mc-assets/dist/entityModels'
 import {
   applyExportedEntityPose,
@@ -12,8 +12,12 @@ import {
   entityTextureUrl,
   entityTextureUrls,
   entityModelName,
+  entityExportVersionFor,
   resolveExportedEntityName,
+  entityModelsVersions,
   getEntityModelsStore,
+  loadEntityModels,
+  setEntityModelsSource,
   getExportedEntity,
   isEntityModelsVersionCovered,
   lookInputFromEntity,
@@ -33,6 +37,12 @@ vi.mock('../threeJsUtils', () => ({ loadThreeJsTextureFromUrlSync: () => ({ prom
 const require = createRequire(import.meta.url)
 const mcAssetsDist = path.dirname(require.resolve('mc-assets/dist/entityModels.json'))
 const VERSION = '26.3'
+
+// the exports the browser fetches (entity-models/<version>.json), read from mc-assets
+setEntityModelsSource({ load: async exportVersion => JSON.parse(fs.readFileSync(path.join(mcAssetsDist, 'entityModels', `${exportVersion}.json`), 'utf8')) })
+beforeAll(async () => {
+  for (const version of entityModelsVersions()) await loadEntityModels(version)
+})
 
 /** Entities drawn by other code than the exported models, by how. */
 const DRAWN_ELSEWHERE: Record<string, string> = {
@@ -97,7 +107,7 @@ const allEntities = (version = VERSION): string[] => {
 }
 
 /** Exported versions minecraft-data has entities of (it reads 1.21.2 as 1.21). */
-const dataVersions = () => getEntityModelsStore().versions.filter(version => require('minecraft-data')(version)?.version.minecraftVersion === version)
+const dataVersions = () => entityModelsVersions().filter(version => require('minecraft-data')(version)?.version.minecraftVersion === version)
 
 const versionNumber = (version: string) => {
   const [x, y = '0', z = '0'] = version.split('.')
@@ -168,8 +178,8 @@ describe('exported entity models', () => {
 
   test('versions before the oldest export keep the older models', () => {
     expect(isEntityModelsVersionCovered(VERSION)).toBe(true)
-    expect(getEntityModelsStore().versions[0]).toBeTruthy()
-    expect(isEntityModelsVersionCovered('1.8.8')).toBe(getEntityModelsStore().versions[0].startsWith('1.8'))
+    expect(entityModelsVersions()[0]).toBeTruthy()
+    expect(isEntityModelsVersionCovered('1.8.8')).toBe(entityModelsVersions()[0].startsWith('1.8'))
     expect(isEntityModelsVersionCovered('1.17')).toBe(true)
   })
 
@@ -194,7 +204,7 @@ describe('exported entity models', () => {
 
 /** The quads a built model entry draws, in entity space, skipping parts the pose hides (as ModelPart.render skips them). */
 function drawnQuads(version: string, entry: EntityModelEntry) {
-  const layer = getEntityModelsStore().getModel(version, entry.model)!
+  const layer = getEntityModelsStore(version)!.getModel(version, entry.model)!
   const parts = new Map<string, ExportedPart[]>()
   const holder = buildModelEntry(entry, layer, parts)
   holder.updateMatrixWorld(true)
@@ -317,5 +327,21 @@ describe('textures by version', () => {
       'textures/entity/iron_golem/iron_golem.png'
     ])
     expect(entityTextureUrls('minecraft:entity/iron_golem/iron_golem', '26.3')).toEqual(['textures/entity/iron_golem/iron_golem.png'])
+  })
+})
+
+describe('exports loaded per version', () => {
+  test('a world version loads the export it reads, once', async () => {
+    expect(loadEntityModels('1.12')).toBe(loadEntityModels('1.11.2'))
+    expect(await loadEntityModels('1.7.10')).toBeUndefined()
+    expect(getEntityModelsStore('1.21.3')).toBe(getEntityModelsStore('1.21.2'))
+    expect(getEntityModelsStore('1.21.3')).not.toBe(getEntityModelsStore('1.21.4'))
+  })
+
+  test('an entity behind a feature flag in its release is drawn from the next export that has it', () => {
+    expect(entityExportVersionFor('1.19.4', 'camel')).toBe('1.20.1')
+    expect(entityExportVersionFor('1.20.5', 'breeze')).toBe('1.21.1')
+    expect(entityExportVersionFor('1.19.4', 'cow')).toBe('1.19.4')
+    expect(buildExportedEntity('1.19.4', 'camel')).toBeTruthy()
   })
 })

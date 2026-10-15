@@ -66,7 +66,11 @@ import {
   prismarineToGameHeadAngles,
   type ExportedEntityBuild,
   type ExportedEntityRig,
-  entityModelName
+  entityExportVersionFor,
+  entityModelName,
+  getEntityModelsStoreFor,
+  loadEntityModels,
+  onEntityModelsLoaded
 } from './entity/exportedEntityModels'
 import { composeEntityLook } from 'mc-assets/dist/entityModels'
 import { disposeObject, loadNearestFilterTexture, loadTexture, loadThreeJsTextureFromUrl } from './threeJsUtils'
@@ -358,10 +362,13 @@ function getEntityMesh(
     try {
       // https://github.com/PrismarineJS/prismarine-viewer/pull/410
       const entityName = entityModelName(entity.name)
+      // the exports load on demand: until the entity's is loaded, the older model, built again once it is
+      void loadEntityModels(world.version)
       const e = new Entity.EntityMesh(world.version, entityName, world, { ...overrides, lookInput: lookInputFromEntity(entity) })
 
       if (e.mesh) {
         if (e.exported) e.mesh.userData[EXPORTED_BUILD_USER_DATA_KEY] = e.exported
+        else if (entityExportVersionFor(world.version, entityName) && !getEntityModelsStoreFor(world.version, entityName)) e.mesh.userData[AWAITING_EXPORT_USER_DATA_KEY] = true
         addNametag(entity, options, e.mesh, world.version)
         return e.mesh
       }
@@ -389,6 +396,11 @@ function getEntityMesh(
   }
   return cube
 }
+
+/** An entity mesh drawn with the older model while the entity's export loads. */
+const AWAITING_EXPORT_USER_DATA_KEY = '_awaitingExportedEntityModels'
+/** The overrides an entity was last updated with, to build it again. */
+const LAST_OVERRIDES_USER_DATA_KEY = '_lastEntityOverrides'
 
 /** The exported model build of an entity mesh: its blocks and items are attached by Entities. */
 const EXPORTED_BUILD_USER_DATA_KEY = '_exportedEntityBuild'
@@ -466,6 +478,13 @@ export class Entities {
     this.debugMode = 'none'
     this.onSkinUpdate = () => {}
     this.watchResourcesUpdates()
+    // entities drawn with the older models while their export loaded: build them from it
+    onEntityModelsLoaded(() => {
+      for (const e of Object.values(this.entities)) {
+        const mesh = e.children.find(child => child.name === 'mesh')
+        if (mesh?.userData[AWAITING_EXPORT_USER_DATA_KEY] && e.originalEntity) this.update(e.originalEntity, e.userData[LAST_OVERRIDES_USER_DATA_KEY] ?? {})
+      }
+    })
   }
 
   handlePlayerEntity(playerData: SceneEntity['originalEntity']) {
@@ -1411,9 +1430,10 @@ export class Entities {
         e.originalEntity.renderHints = entity.renderHints
       }
       const rig = mesh?.userData[EXPORTED_ENTITY_USER_DATA_KEY] as ExportedEntityRig | undefined
-      if (mesh && rig) {
-        const exported = getExportedEntity(this.worldRenderer.version, rig.name)
-        if (exported && lookSignature(composeEntityLook(exported, lookInputFromEntity(entity))) !== rig.signature) {
+      const awaiting = !rig && !!mesh?.userData[AWAITING_EXPORT_USER_DATA_KEY] && !!entity.name && !!getExportedEntity(this.worldRenderer.version, entityModelName(entity.name))
+      if (mesh && (rig || awaiting)) {
+        const exported = getExportedEntity(this.worldRenderer.version, rig?.name ?? entityModelName(entity.name!))
+        if (exported && (awaiting || lookSignature(composeEntityLook(exported, lookInputFromEntity(entity))) !== rig!.signature)) {
           const rebuilt = getEntityMesh(this.mcData, entity, this.worldRenderer, this.entitiesOptions, { ...overrides, customModel: entity['customModel'] })
           if (rebuilt) {
             rebuilt.name = 'mesh'
@@ -1428,6 +1448,7 @@ export class Entities {
     }
 
     this.applyEntityRenderHints(e, entity)
+    e.userData[LAST_OVERRIDES_USER_DATA_KEY] = overrides
 
     // Update equipment
     this.updateEntityEquipment(e, entity)

@@ -1,9 +1,10 @@
 import * as THREE from 'three'
 import { snakeCase } from 'change-case'
-import entityModelsJson from 'mc-assets/dist/entityModels.json'
+import entityModelsIndex from 'mc-assets/dist/entityModelsIndex.json'
 import {
   composeEntityLook,
   ENTITY_EQUIPMENT_SLOTS,
+  entityModelsExportFor,
   entityTextureFolder,
   EntityModelsStore,
   type EntityBlockEntry,
@@ -16,7 +17,8 @@ import {
   type EntityModelEntry,
   type EntityModelLayer,
   type EntityModelPart,
-  type EntityModelsData
+  type EntityModelsData,
+  type EntityModelsIndex
 } from 'mc-assets/dist/entityModels'
 import { createCanvas } from '../../lib/utils'
 import { loadThreeJsTextureFromUrlSync } from '../threeJsUtils'
@@ -31,8 +33,72 @@ import { loadThreeJsTextureFromUrlSync } from '../threeJsUtils'
  * down) under the entry's transform, which already holds the renderer's scale(-1, -1, 1) and 1.501 translation.
  */
 
-let store: EntityModelsStore | undefined
-export const getEntityModelsStore = () => (store ??= new EntityModelsStore(entityModelsJson as unknown as EntityModelsData))
+/** The exported versions and the older texture copies (mc-assets' dist/entityModelsIndex.json, bundled: a few KB). */
+const index = entityModelsIndex as unknown as EntityModelsIndex
+
+/** The exported versions, oldest first. */
+export const entityModelsVersions = () => index.versions
+
+/**
+ * Where the exports are loaded from: mc-assets' dist/entityModels/<version>.json, served next to the textures as
+ * entity-models/<version>.json (relative to the page, or the worker script, like textures/).
+ */
+let loadExport: (exportVersion: string) => Promise<EntityModelsData> = async exportVersion => {
+  const response = await fetch(`${entityModelsBaseUrl}${exportVersion}.json`)
+  if (!response.ok) throw new Error(`entity models ${exportVersion}: HTTP ${response.status}`)
+  return response.json()
+}
+let entityModelsBaseUrl = 'entity-models/'
+
+/** Where to load the exports from: a base url, or a loader of an export's data (tests read the files). */
+export const setEntityModelsSource = (source: { baseUrl?: string; load?: (exportVersion: string) => Promise<EntityModelsData> }) => {
+  if (source.baseUrl !== undefined) entityModelsBaseUrl = source.baseUrl
+  if (source.load) loadExport = source.load
+}
+
+const stores = new Map<string, EntityModelsStore>()
+const loading = new Map<string, Promise<EntityModelsStore | undefined>>()
+const loadedListeners = new Set<(exportVersion: string) => void>()
+
+/** Called when an export is loaded: entities drawn by the older models meanwhile can be built again. */
+export const onEntityModelsLoaded = (listener: (exportVersion: string) => void) => {
+  loadedListeners.add(listener)
+  return () => loadedListeners.delete(listener)
+}
+
+/** Loads the export a world version reads (once); resolves to undefined when the version is not covered or it fails. */
+export const loadEntityModels = (version: string): Promise<EntityModelsStore | undefined> => {
+  if (!isEntityModelsVersionCovered(version)) return Promise.resolve(undefined)
+  const exportVersion = entityModelsExportFor(index.versions, version)!
+  let promise = loading.get(exportVersion)
+  if (!promise) {
+    promise = loadExport(exportVersion).then(
+      data => {
+        const store = new EntityModelsStore(data)
+        stores.set(exportVersion, store)
+        for (const listener of loadedListeners) listener(exportVersion)
+        return store
+      },
+      err => {
+        console.error('[entity models] failed to load', exportVersion, err)
+        return undefined
+      }
+    )
+    loading.set(exportVersion, promise)
+  }
+  return promise
+}
+
+/**
+ * The loaded export a world version reads; undefined (and loading starts) while it is not loaded yet: until then
+ * entities are drawn by the renderer's older models.
+ */
+export const getEntityModelsStore = (version: string): EntityModelsStore | undefined => {
+  if (!isEntityModelsVersionCovered(version)) return undefined
+  const store = stores.get(entityModelsExportFor(index.versions, version)!)
+  if (!store) void loadEntityModels(version)
+  return store
+}
 
 const versionToNumber = (version: string) => {
   const [x, y = '0', z = '0'] = version.split('.')
@@ -44,7 +110,7 @@ const versionToNumber = (version: string) => {
  * versions keep the renderer's own models). A version between two exports uses the older one.
  */
 export const isEntityModelsVersionCovered = (version: string) => {
-  const versions = getEntityModelsStore().versions
+  const versions = index.versions
   if (!versions.length || !version) return false
   const [major, minor] = versions[0].split('.')
   return versionToNumber(version) >= versionToNumber(minor === undefined ? major : `${major}.${minor}`)
@@ -74,16 +140,35 @@ const OBJECT_NAMES: Record<string, string[]> = {
   'iron_golem}': ['iron_golem']
 }
 
-/** The name the version's export has the entity under: its own, or the registered name of an object minecraft-data names otherwise. */
+/** The name the exports have the entity under: its own, or the registered name of an object minecraft-data names otherwise. */
 export const resolveExportedEntityName = (version: string, name: string) => {
-  const store = getEntityModelsStore()
-  if (store.getEntity(version, name)) return name
-  return OBJECT_NAMES[name]?.find(candidate => store.getEntity(version, candidate)) ?? name
+  const own = isEntityModelsVersionCovered(version) ? entityModelsExportFor(index.versions, version) : undefined
+  const candidates = [name, ...(OBJECT_NAMES[name] ?? [])]
+  // the version's own export first (1.12 names fireworks_rocket what 1.13 calls firework_rocket), then any
+  return candidates.find(candidate => own && index.entityExports[candidate]?.includes(own)) ?? candidates.find(candidate => index.entityExports[candidate]) ?? name
+}
+
+/**
+ * The export a world version draws an entity from: the one it reads, or, for an entity behind a feature flag the
+ * exporting client did not enable (a camel in 1.19.4, a breeze in 1.20.5), the next export that has it.
+ */
+export const entityExportVersionFor = (version: string, name: string): string | undefined => {
+  if (!isEntityModelsVersionCovered(version)) return undefined
+  const own = entityModelsExportFor(index.versions, version)!
+  const exports = index.entityExports[resolveExportedEntityName(version, name)]
+  if (!exports?.length) return undefined
+  if (exports.includes(own)) return own
+  return exports.find(exported => versionToNumber(exported) > versionToNumber(own))
+}
+
+/** The loaded store an entity is drawn from (see {@link entityExportVersionFor}); undefined while it loads. */
+export const getEntityModelsStoreFor = (version: string, name: string): EntityModelsStore | undefined => {
+  const exportVersion = entityExportVersionFor(version, name)
+  return exportVersion ? getEntityModelsStore(exportVersion) : undefined
 }
 
 export const getExportedEntity = (version: string, name: string): EntityDefinition | undefined => {
-  if (!isEntityModelsVersionCovered(version)) return undefined
-  return getEntityModelsStore().getEntity(version, resolveExportedEntityName(version, name))
+  return getEntityModelsStoreFor(version, name)?.getEntity(version, resolveExportedEntityName(version, name))
 }
 
 /** The metadata and equipment of a prismarine entity, as the look conditions read them. */
@@ -115,7 +200,7 @@ export const entityTextureUrl = (texture: string) => `textures/${texture.replace
  */
 export const entityTextureUrls = (texture: string, version?: string) => {
   const latest = entityTextureUrl(texture)
-  const folder = version ? entityTextureFolder(entityModelsJson as unknown as EntityModelsData, texture, version) : 'latest'
+  const folder = version ? entityTextureFolder(index, texture, version) : 'latest'
   return folder === 'latest' ? [latest] : [`textures/${folder}/${texture.replace(/^minecraft:/, '')}.png`, latest]
 }
 
@@ -426,7 +511,7 @@ export function buildExportedEntity(version: string, name: string, input: Entity
   if (!entity) return undefined
   const look = composeEntityLook(entity, input)
   if (!look.length) return undefined
-  const store = getEntityModelsStore()
+  const store = getEntityModelsStoreFor(version, name)!
   const object = new THREE.Group()
   object.name = `exported_entity_${name}`
   const rig: ExportedEntityRig = { name, signature: lookSignature(look), parts: new Map() }

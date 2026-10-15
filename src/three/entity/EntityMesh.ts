@@ -17,7 +17,7 @@ import { BOAT_OBJ_OFFSET_Y } from './boatRenderSetup'
 import { isBoatEntityName } from './boatModelRotation'
 import { VANILLA_117_HORSE_ENTITY_SCALES } from './horseEntityScale'
 import { createHorseHeadRig } from './horseHeadAnimation'
-import { buildExportedEntity, getEntityModelsStore, getExportedEntity, type ExportedEntityBuild } from './exportedEntityModels'
+import { buildExportedEntity, getEntityModelsStoreFor, getExportedEntity, type ExportedEntityBuild } from './exportedEntityModels'
 import type { EntityLookInput } from 'mc-assets/dist/entityModels'
 
 interface ElemFace {
@@ -733,7 +733,7 @@ export class EntityMesh {
       }
       for (const entry of Object.values(look)) {
         if (entry.type !== 'model') continue
-        const layer = getEntityModelsStore().getModel(version!, entry.model)
+        const layer = getEntityModelsStoreFor(version!, name)?.getModel(version!, entry.model)
         if (layer) collect(layer.root)
       }
       return { boneNames: [...boneNames] }

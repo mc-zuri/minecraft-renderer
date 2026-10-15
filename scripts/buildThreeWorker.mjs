@@ -46,8 +46,8 @@ const buildOptions = createWorkerBuildOptions({
               if (/itemDefinitions\.json$/.test(args.path)) return
               if (/itemsAtlases\.json$/.test(args.path)) return
               if (/blocksAtlases\.json$/.test(args.path)) return
-              // entity models exported from the game: the worker builds entity meshes
-              if (/entityModels\.json$/.test(args.path)) return
+              // the index of the entity models exported from the game (the exports are fetched per version: entity-models/)
+              if (/entityModelsIndex\.json$/.test(args.path)) return
               return {
                 path: args.path,
                 namespace: 'empty-mc-assets'
