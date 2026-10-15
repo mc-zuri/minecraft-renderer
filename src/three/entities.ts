@@ -2017,7 +2017,11 @@ export class Entities {
       animInput.headYaw = finite((entity as { headYaw?: number }).headYaw, animInput.bodyYaw)
       animInput.pitch = finite(entity.pitch, animInput.pitch)
       const position = entity.position ?? (entity as { pos?: { x: number; y: number; z: number } }).pos
-      if (!headRotationOnly && position && Number.isFinite(position.x)) animInput.position = { x: position.x, y: position.y, z: position.z }
+      if (!headRotationOnly && position && Number.isFinite(position.x)) {
+        animInput.position = { x: position.x, y: position.y, z: position.z }
+        // when it arrived: the ticks reach it in order, however many one frame covers
+        ;(e.userData[ANIM_TRACKER_USER_DATA_KEY] as EntityAnimTracker | undefined)?.walk.setPosition(animInput.position, performance.now())
+      }
       animInput.onGround = (entity as { onGround?: boolean }).onGround
     }
     const cameraSynced = usesCameraSyncedVehiclePosition(entity)

@@ -42,44 +42,69 @@ export class WalkAnimation {
 }
 
 /**
- * Advances a walk animation in client ticks (50 ms) from the positions an entity is seen at; the frame's partial tick
- * interpolates between ticks as the game's frame does.
+ * Advances a walk animation in client ticks (50 ms) as the game moves a remote entity: a position the server sends is
+ * reached over the next 3 ticks (lerpTo / InterpolationHandler: a third, a half, then the rest of the way), and the walk
+ * reads how far each tick moved it. Positions keep the time they arrived, so the ticks a slow frame covers each see the
+ * positions sent before them, not the newest one for all; the frame's partial tick interpolates between ticks.
  */
 export class TickedWalk {
   readonly walk = new WalkAnimation()
-  private last?: { x: number; y: number; z: number }
-  private pending?: { x: number; y: number; z: number }
+  /** where the client's ticks have the entity, and where they move it */
+  private current?: Vec3Like
+  private target?: Vec3Like
+  private lerpSteps = 0
+  /** positions sent after the last tick, in order, with when they arrived (ms; undefined: before the next tick) */
+  private arrivals: Array<{ at?: number; position: Vec3Like }> = []
   private accumulated = 0
   /** the frame's partial tick, 0 to 1 */
   partialTick = 0
 
-  /** The entity's latest position (the tick advance reads the newest one). */
-  setPosition(position: { x: number; y: number; z: number }) {
-    this.pending = { x: position.x, y: position.y, z: position.z }
+  /** A position the entity was sent (again: ignored), and when it arrived. */
+  setPosition(position: Vec3Like, at?: number) {
+    const newest = this.arrivals.at(-1)?.position ?? this.target
+    if (newest && newest.x === position.x && newest.y === position.y && newest.z === position.z) return
+    this.arrivals.push({ at, position: { x: position.x, y: position.y, z: position.z } })
   }
 
-  /** Advances by the frame's time; returns the number of ticks passed. */
-  advance(deltaSeconds: number, options: { useY?: boolean; positionScale?: number; still?: boolean } = {}) {
-    this.accumulated += Math.max(0, deltaSeconds)
+  /** Advances by the frame's time (ending now, ms); returns the number of ticks passed. */
+  advance(deltaSeconds: number, options: { useY?: boolean; positionScale?: number; still?: boolean } = {}, now = performance.now()) {
+    const delta = Math.max(0, deltaSeconds)
+    // the last tick was this long before the frame started
+    let tickAt = now - delta * 1000 - this.accumulated * 1000
+    this.accumulated += delta
     let ticks = 0
     while (this.accumulated >= 0.05) {
       this.accumulated -= 0.05
+      tickAt += 50
       ticks++
-      const position = this.pending ?? this.last
-      if (!position) continue
+      while (this.arrivals.length && (this.arrivals[0].at === undefined || this.arrivals[0].at <= tickAt)) {
+        const { position } = this.arrivals.shift()!
+        this.target = position
+        this.lerpSteps = 3
+        // first seen: there, not moved
+        this.current ??= position
+      }
+      const { current, target } = this
+      if (!current || !target) continue
+      let next = current
+      if (this.lerpSteps > 0) {
+        const alpha = 1 / this.lerpSteps
+        next = { x: current.x + (target.x - current.x) * alpha, y: current.y + (target.y - current.y) * alpha, z: current.z + (target.z - current.z) * alpha }
+        this.lerpSteps--
+      }
       if (options.still) {
         this.walk.stop()
       } else {
-        const last = this.last ?? position
-        const dx = position.x - last.x
-        const dy = options.useY ? position.y - last.y : 0
-        const dz = position.z - last.z
+        const dx = next.x - current.x
+        const dy = options.useY ? next.y - current.y : 0
+        const dz = next.z - current.z
         this.walk.updateFromDistance(Math.sqrt(dx * dx + dy * dy + dz * dz), options.positionScale ?? 1)
       }
-      this.last = position
-      this.pending = undefined
+      this.current = next
     }
     this.partialTick = Math.min(1, this.accumulated / 0.05)
     return ticks
   }
 }
+
+type Vec3Like = { x: number; y: number; z: number }
