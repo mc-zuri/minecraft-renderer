@@ -554,7 +554,16 @@ export class Entities {
     onEntityModelsLoaded(() => {
       for (const e of Object.values(this.entities)) {
         const mesh = e.children.find(child => child.name === 'mesh')
-        if (mesh?.userData[AWAITING_EXPORT_USER_DATA_KEY] && e.originalEntity) this.update(e.originalEntity, e.userData[LAST_OVERRIDES_USER_DATA_KEY] ?? {})
+        if (!mesh?.userData[AWAITING_EXPORT_USER_DATA_KEY] || !e.originalEntity) continue
+        const overrides = e.userData[LAST_OVERRIDES_USER_DATA_KEY] ?? {}
+        // an item-like entity (ThrownItemRenderer) is made its item when it spawns: spawned again
+        if (exportedItemEntity(this.worldRenderer.version, e.originalEntity.name)) {
+          const entity = e.originalEntity
+          this.update({ id: entity.id, delete: true } as SceneEntity['originalEntity'], {})
+          this.update(entity, overrides)
+          continue
+        }
+        this.update(e.originalEntity, overrides)
       }
       // and the head items players wear
       for (const e of [this.playerEntity, ...Object.values(this.entities)]) {
@@ -567,6 +576,8 @@ export class Entities {
     if (!this.isRenderingAllowed()) return
     // Create player entity if it doesn't exist
     if (!this.playerEntity) {
+      // the version's entity models start loading with the world, before the first entity needs them
+      void loadEntityModels(this.worldRenderer.version)
       // Create the player entity similar to how normal entities are created
       const group = new THREE.Group() as unknown as SceneEntity
       group.originalEntity = { ...playerData, name: 'player' } as SceneEntity['originalEntity']
