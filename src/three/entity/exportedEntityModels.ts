@@ -2,8 +2,12 @@ import * as THREE from 'three'
 import { snakeCase } from 'change-case'
 import entityModelsIndex from 'mc-assets/dist/entityModelsIndex.json'
 import {
+  composeEntityArmor,
   composeEntityLook,
   ENTITY_EQUIPMENT_SLOTS,
+  paintingVariant,
+  type PaintingsData,
+  type PaintingVariant,
   entityModelsExportFor,
   entityTextureFolder,
   EntityModelsStore,
@@ -174,12 +178,41 @@ export const getExportedEntity = (version: string, name: string): EntityDefiniti
 /** The metadata and equipment of a prismarine entity, as the look conditions read them. */
 export const lookInputFromEntity = (entity: { metadata?: unknown; equipment?: Array<{ name?: string } | null | undefined> }): EntityLookInput => {
   const equipment: Record<string, string | undefined> = {}
+  const equipmentColors: Record<string, number | undefined> = {}
   for (const [index, slot] of ENTITY_EQUIPMENT_SLOTS.entries()) {
     const item = entity.equipment?.[index]
     if (item?.name) equipment[slot] = item.name
+    const color = item ? itemDyeColor(item) : undefined
+    if (color !== undefined) equipmentColors[slot] = color
   }
-  return { metadata: (entity.metadata ?? undefined) as EntityLookInput['metadata'], equipment }
+  return { metadata: (entity.metadata ?? undefined) as EntityLookInput['metadata'], equipment, equipmentColors }
 }
+
+/**
+ * A dyed item's color (RGB): the dyed_color component (1.20.5+, prismarine-item components) or the display.color tag
+ * before.
+ */
+export const itemDyeColor = (item: unknown): number | undefined => {
+  const value = item as {
+    components?: Array<{ type?: string; data?: unknown }>
+    componentMap?: Map<string, { data?: unknown }>
+    nbt?: { value?: { display?: { value?: { color?: { value?: number } } } } }
+  }
+  const fromData = (data: unknown) => {
+    if (typeof data === 'number') return data
+    const object = data as { color?: number; rgb?: number } | undefined
+    return typeof object?.color === 'number' ? object.color : typeof object?.rgb === 'number' ? object.rgb : undefined
+  }
+  const component = value.componentMap?.get?.('dyed_color')?.data ?? value.components?.find(c => c.type === 'dyed_color')?.data
+  const color = component !== undefined ? fromData(component) : value.nbt?.value?.display?.value?.color?.value
+  return typeof color === 'number' ? color & 0xff_ff_ff : undefined
+}
+
+/** Everything an exported entity draws for its metadata and equipment: its look, then the armor it wears. */
+export const exportedEntityLook = (entity: EntityDefinition, input: EntityLookInput = {}) => [
+  ...composeEntityLook(entity, input),
+  ...composeEntityArmor(entity, input.equipment, input.equipmentColors)
+]
 
 /** Identifies a look: rebuild the mesh when it changes. */
 export const lookSignature = (look: Array<{ key: string; entry: EntityLookEntry }>) =>
@@ -339,6 +372,8 @@ export type ExportedEntityRig = {
   signature: string
   /** parts of every model entry by part name, in tree order */
   parts: Map<string, ExportedPart[]>
+  /** the export draws the armor the entity wears */
+  armor?: boolean
 }
 
 export const EXPORTED_ENTITY_USER_DATA_KEY = '_exportedEntityRig'
@@ -509,12 +544,12 @@ export type ExportedEntityBuild = {
 export function buildExportedEntity(version: string, name: string, input: EntityLookInput = {}): ExportedEntityBuild | undefined {
   const entity = getExportedEntity(version, name)
   if (!entity) return undefined
-  const look = composeEntityLook(entity, input)
+  const look = exportedEntityLook(entity, input)
   if (!look.length) return undefined
   const store = getEntityModelsStoreFor(version, name)!
   const object = new THREE.Group()
   object.name = `exported_entity_${name}`
-  const rig: ExportedEntityRig = { name, signature: lookSignature(look), parts: new Map() }
+  const rig: ExportedEntityRig = { name, signature: lookSignature(look), parts: new Map(), armor: !!entity.armor }
   const result: ExportedEntityBuild = { object, rig, blocks: [], items: [], custom: [] }
   for (const { entry } of look) {
     if (entry.type === 'model') {
@@ -535,6 +570,175 @@ export function buildExportedEntity(version: string, name: string, input: Entity
   object.userData[EXPORTED_ENTITY_USER_DATA_KEY] = rig
   return result
 }
+
+// ---- paintings -----------------------------------------------------------------------------------------------------
+
+/** The painting variants a server sent (1.21+ registry data), by network id: a datapack's own variants. */
+let serverPaintingVariants: PaintingVariant[] | undefined
+
+/**
+ * The painting_variant registry the server sent (registry_data, 1.21+): entries in its order, each with the variant's
+ * asset_id, width and height (blocks). Vanilla servers send the vanilla registry, the exported one.
+ */
+export const setServerPaintingVariants = (entries: Array<{ id: string; assetId?: string; asset_id?: string; width: number; height: number }> | undefined) => {
+  serverPaintingVariants = entries?.map(entry => {
+    const asset = (entry.assetId ?? entry.asset_id ?? entry.id).replace(/^minecraft:/, '')
+    const [namespace, path] = asset.includes(':') ? asset.split(':') : ['minecraft', asset]
+    return { id: entry.id, width: entry.width, height: entry.height, texture: `${namespace}:painting/${path}` }
+  })
+}
+
+/** A painting: its variant (registry id or index, id or title, or the variant's data sent inline) and facing. */
+export type PaintingInput = {
+  variant: number | string | { asset_id?: string; assetId?: string; width: number; height: number } | undefined
+  /** 0 south, 1 west, 2 north, 3 east (the game's 2D direction values) */
+  direction: number
+}
+
+const DIRECTION_3D_TO_2D: Record<number, number> = { 2: 2, 3: 0, 4: 1, 5: 3 }
+
+/**
+ * A painting's variant and facing from what the client knows: metadata (painting_variant; direction from 1.21.11), the
+ * spawn packet's data (direction as a 3D value, 1.19 to 1.21.10), or what a client set from the 1.8 to 1.18 painting
+ * spawn packet (paintingVariant: the title or motive id, paintingDirection: 2D).
+ */
+export const paintingInputFromEntity = (
+  entity: { metadata?: unknown; objectData?: unknown; paintingVariant?: unknown; paintingDirection?: unknown; yaw?: number },
+  metadataKeys: string[] | undefined
+): PaintingInput => {
+  const metadata = entity.metadata as Record<number, unknown> | unknown[] | undefined
+  const read = (key: string) => {
+    const index = metadataKeys?.indexOf(key) ?? -1
+    return index >= 0 ? (metadata as Record<number, unknown> | undefined)?.[index] : undefined
+  }
+  let variant: PaintingInput['variant'] = entity.paintingVariant as PaintingInput['variant']
+  const fromMetadata = read('painting_variant') as unknown
+  if (variant === undefined && fromMetadata !== undefined) {
+    const holder = fromMetadata as { variantId?: number; variantData?: { asset_id?: string; assetId?: string; width: number; height: number } }
+    variant = typeof fromMetadata === 'number' ? fromMetadata : holder.variantId ?? holder.variantData
+  }
+  let direction = typeof entity.paintingDirection === 'number' ? entity.paintingDirection : undefined
+  const fromDirection = read('direction')
+  if (direction === undefined && typeof fromDirection === 'number') direction = DIRECTION_3D_TO_2D[fromDirection]
+  if (direction === undefined && typeof entity.objectData === 'number') direction = DIRECTION_3D_TO_2D[entity.objectData]
+  return { variant, direction: direction ?? 0 }
+}
+
+/** The variant drawn: inline data, the server's registry (1.21+), else the exported list; null when unknown. */
+const resolvePaintingVariant = (paintings: PaintingsData, variant: PaintingInput['variant']): PaintingVariant | undefined => {
+  if (variant && typeof variant === 'object') {
+    const asset = (variant.assetId ?? variant.asset_id ?? '').replace(/^minecraft:/, '')
+    return { id: asset, width: variant.width, height: variant.height, texture: `minecraft:painting/${asset}` }
+  }
+  if (typeof variant === 'number' && serverPaintingVariants) return serverPaintingVariants[variant]
+  return paintingVariant(paintings, variant)
+}
+
+/**
+ * The quads of a size the export has no template for (a datapack's painting): PaintingRenderer of 1.21, front and back
+ * per block and the edges around.
+ */
+const paintingQuads = (width: number, height: number): PaintingsData['templates'][string] => {
+  const quads: PaintingsData['templates'][string] = []
+  const offsetX = -width / 2
+  const offsetY = -height / 2
+  const d = 0.031_25
+  for (let segmentX = 0; segmentX < width; segmentX++) {
+    for (let segmentY = 0; segmentY < height; segmentY++) {
+      const x0 = offsetX + segmentX + 1
+      const x1 = offsetX + segmentX
+      const y0 = offsetY + segmentY + 1
+      const y1 = offsetY + segmentY
+      const u0 = (width - segmentX) / width
+      const u1 = (width - segmentX - 1) / width
+      const v0 = (height - segmentY) / height
+      const v1 = (height - segmentY - 1) / height
+      quads.push({ face: 'front', vertices: [[x0, y1, -d, u1, v0], [x1, y1, -d, u0, v0], [x1, y0, -d, u0, v1], [x0, y0, -d, u1, v1]] })
+      quads.push({ face: 'back', vertices: [[x0, y0, d, 1, 0], [x1, y0, d, 0, 0], [x1, y1, d, 0, 1], [x0, y1, d, 1, 1]] })
+      if (segmentY === height - 1) quads.push({ face: 'back', vertices: [[x0, y0, -d, 0, 0], [x1, y0, -d, 1, 0], [x1, y0, d, 1, 0.0625], [x0, y0, d, 0, 0.0625]] })
+      if (segmentY === 0) quads.push({ face: 'back', vertices: [[x0, y1, d, 0, 0], [x1, y1, d, 1, 0], [x1, y1, -d, 1, 0.0625], [x0, y1, -d, 0, 0.0625]] })
+      if (segmentX === width - 1) quads.push({ face: 'back', vertices: [[x0, y0, d, 0.0625, 0], [x0, y1, d, 0.0625, 1], [x0, y1, -d, 0, 1], [x0, y0, -d, 0, 0]] })
+      if (segmentX === 0) quads.push({ face: 'back', vertices: [[x1, y0, -d, 0.0625, 0], [x1, y1, -d, 0.0625, 1], [x1, y1, d, 0, 1], [x1, y0, d, 0, 0]] })
+    }
+  }
+  return quads
+}
+
+const STEPS_2D: Array<[number, number]> = [
+  [0, 1], // south
+  [-1, 0], // west
+  [0, -1], // north
+  [1, 0] // east
+]
+
+/**
+ * Where the painting is drawn from its block (what the spawn packet sends): HangingEntity's center, half a pixel off the
+ * wall, shifted half a block along and up for even sizes.
+ */
+export const paintingOffset = (width: number, height: number, direction: number): [number, number, number] => {
+  const [stepX, stepZ] = STEPS_2D[direction & 3]!
+  // counterclockwise: south -> east, west -> south, north -> west, east -> north
+  const [ccwX, ccwZ] = STEPS_2D[(direction + 3) & 3]!
+  const along = width % 2 === 0 ? 0.5 : 0
+  const up = height % 2 === 0 ? 0.5 : 0
+  return [0.5 - stepX * 0.468_75 + ccwX * along, 0.5 + up, 0.5 - stepZ * 0.468_75 + ccwZ * along]
+}
+
+/**
+ * A painting as PaintingRenderer draws it, relative to its block: the size's quads from the export (or the 1.21 renderer's
+ * for a size it has none of), the front from the variant's texture, the back and edges from the back texture.
+ */
+export function buildExportedPainting(version: string, input: PaintingInput): THREE.Group | undefined {
+  // the version's own export: every export has its paintings
+  const store = getEntityModelsStore(version)
+  const paintings = store?.getPaintings(version)
+  if (!paintings) return undefined
+  const variant = resolvePaintingVariant(paintings, input.variant)
+  if (!variant) return undefined
+  const quads = paintings.templates[`${variant.width}x${variant.height}`] ?? paintingQuads(variant.width, variant.height)
+  const group = new THREE.Group()
+  group.name = `exported_painting_${variant.id}`
+  const turned = new THREE.Group()
+  turned.rotation.y = THREE.MathUtils.degToRad(180 - 90 * input.direction)
+  turned.position.set(...paintingOffset(variant.width, variant.height, input.direction))
+  group.add(turned)
+  for (const face of ['front', 'back'] as const) {
+    const [u0, v0, u1, v1] = (face === 'front' ? variant.rect : paintings.back.rect) ?? [0, 0, 1, 1]
+    const positions: number[] = []
+    const uvs: number[] = []
+    const indices: number[] = []
+    for (const quad of quads) {
+      if (quad.face !== face) continue
+      const start = positions.length / 3
+      for (const [x, y, z, u, v] of quad.vertices) {
+        positions.push(x, y, z)
+        uvs.push(u0 + u * (u1 - u0), v0 + v * (v1 - v0))
+      }
+      indices.push(start, start + 1, start + 2, start, start + 2, start + 3)
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+    geometry.setIndex(indices)
+    geometry.computeVertexNormals()
+    const material = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide, alphaTest: 0.1 })
+    const texture = face === 'front' ? variant.texture : paintings.back.texture
+    void loadEntityTexture(texture, undefined, version)
+      .then(map => {
+        material.map = map
+        material.needsUpdate = true
+      })
+      .catch(() => {})
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.name = `painting_${face}`
+    turned.add(mesh)
+  }
+  group.userData[PAINTING_SIGNATURE_USER_DATA_KEY] = paintingSignature(input)
+  return group
+}
+
+export const PAINTING_SIGNATURE_USER_DATA_KEY = '_exportedPaintingSignature'
+export const paintingSignature = (input: PaintingInput) => JSON.stringify(input)
 
 /** Does the entity draw a model of its own (not only items, blocks or custom geometry)? */
 export const exportedEntityHasModel = (version: string, name: string) => {

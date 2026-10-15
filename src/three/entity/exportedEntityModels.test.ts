@@ -12,6 +12,11 @@ import {
   entityTextureUrl,
   entityTextureUrls,
   entityModelName,
+  buildExportedPainting,
+  exportedEntityLook,
+  paintingInputFromEntity,
+  paintingOffset,
+  setServerPaintingVariants,
   entityExportVersionFor,
   resolveExportedEntityName,
   entityModelsVersions,
@@ -68,7 +73,6 @@ const NOT_DRAWN: Record<string, string> = {
   interaction: 'no renderer output (NoopRenderer)',
   area_effect_cloud: 'no renderer output (NoopRenderer), particles only',
   lightning_bolt: 'custom geometry, not drawn',
-  painting: 'custom geometry from the paintings atlas, not drawn',
   ominous_item_spawner: 'draws only the item it is about to drop',
   block_display: 'display entity, drawn by its block',
   item_display: 'display entity, drawn by its item'
@@ -132,6 +136,15 @@ describe('exported entity models', () => {
     for (const name of allEntities(version)) {
       // boats keep the OBJ model their paddle, water patch and passenger rigs are made for
       if (elsewhere[name] || NOT_DRAWN[name] || isBoatEntityName(name)) continue
+      // paintings: PaintingRenderer's quads from the export, every variant
+      if (name === 'painting') {
+        const paintings = getEntityModelsStore(version)?.getPaintings(version)
+        if (!paintings?.variants.length) uncovered.push('painting: no paintings exported')
+        for (const [index, variant] of paintings?.variants.entries() ?? []) {
+          if (!buildExportedPainting(version, { variant: index, direction: 0 })) uncovered.push(`painting ${variant.id}: not drawn`)
+        }
+        continue
+      }
       const exported = getExportedEntity(version, name)
       if (!exported) {
         uncovered.push(`${name}: not exported`)
@@ -235,10 +248,10 @@ function drawnQuads(version: string, entry: EntityModelEntry) {
 
 // the game's quads for a few entities, written by the exporter: 26.3 (submit node collectors), 1.21.4 (render states,
 // buffers) and 1.20.4 (entities drawn part by part)
-describe.each([reference26, reference1214, reference1204, reference1144, reference189] as Array<Record<string, Record<string, number[][][]> | string>>)('built meshes draw what $version draws', reference => {
+describe.each([reference26, reference1214, reference1204, reference1144, reference189] as unknown as Array<Record<string, Record<string, number[][][]> | string>>)('built meshes draw what $version draws', reference => {
   const version = reference.version as string
   for (const [name, entries] of Object.entries(reference)) {
-    if (typeof entries === 'string') continue
+    if (typeof entries === 'string' || name === 'paintings') continue
     test(name, () => {
       const look = composeEntityLook(getExportedEntity(version, name)!)
       for (const [key, expected] of Object.entries(entries)) {
@@ -343,5 +356,121 @@ describe('exports loaded per version', () => {
     expect(entityExportVersionFor('1.20.5', 'breeze')).toBe('1.21.1')
     expect(entityExportVersionFor('1.19.4', 'cow')).toBe('1.19.4')
     expect(buildExportedEntity('1.19.4', 'camel')).toBeTruthy()
+  })
+})
+
+type PaintingReference = { variant: string; frontRect: number[]; backRect: number[]; north: number[][][]; east: number[][][] }
+
+/** The quads of a built painting relative to the painting entity (the block offset taken away), by face, uvs within the face's texture. */
+function paintingQuads(painting: THREE.Group) {
+  const turned = painting.children[0]!
+  const offset = turned.position.clone()
+  turned.updateMatrix()
+  const byFace: Record<string, number[][][]> = {}
+  for (const mesh of turned.children as THREE.Mesh[]) {
+    const position = mesh.geometry.getAttribute('position')
+    const uv = mesh.geometry.getAttribute('uv')
+    const quads: number[][][] = []
+    for (let start = 0; start < position.count; start += 4) {
+      const quad: number[][] = []
+      for (let i = start; i < start + 4; i++) {
+        const vertex = new THREE.Vector3().fromBufferAttribute(position, i).applyMatrix4(turned.matrix).sub(offset)
+        quad.push([vertex.x, vertex.y, vertex.z, uv.getX(i), uv.getY(i)])
+      }
+      quads.push(quad)
+    }
+    byFace[mesh.name.replace('painting_', '')] = quads
+  }
+  return byFace
+}
+
+describe.each([reference26, reference1214, reference1204, reference1144, reference189] as Array<Record<string, unknown>>)('paintings draw what $version draws', reference => {
+  const version = reference.version as string
+  for (const [size, painting] of Object.entries((reference.paintings ?? {}) as Record<string, PaintingReference>)) {
+    test(size, () => {
+      for (const [facing, direction] of [['north', 2], ['east', 3]] as const) {
+        const built = paintingQuads(buildExportedPainting(version, { variant: painting.variant, direction })!)
+        const inside = (quad: number[][], rect: number[]) => quad.every(([, , , u, v]) => u! >= rect[0]! - 1e-6 && u! <= rect[2]! + 1e-6 && v! >= rect[1]! - 1e-6 && v! <= rect[3]! + 1e-6)
+        for (const face of ['front', 'back'] as const) {
+          const rect = face === 'front' ? painting.frontRect : painting.backRect
+          // the game's quads of the face, uvs within its sprite
+          const expected = painting[facing].filter(quad => inside(quad, rect) && (face === 'back' || !inside(quad, painting.backRect)))
+          const actual = built[face]!
+          expect(actual.length, `${size} ${facing} ${face}`).toBe(expected.length)
+          for (const [q, quad] of expected.entries()) {
+            for (const [v, vertex] of quad.entries()) {
+              // the game's uv within the sprite it samples, read in the reader's texture rectangle (all of a painting's
+              // texture since 1.14, the painting's part of the 1.8 paintings texture before)
+              const paintings = getEntityModelsStore(version)!.getPaintings(version)!
+              const reader = (face === 'front' ? paintings.variants.find(v => v.id === painting.variant)!.rect : paintings.back.rect) ?? [0, 0, 1, 1]
+              const nu = (vertex[3]! - rect[0]!) / (rect[2]! - rect[0]!)
+              const nv = (vertex[4]! - rect[1]!) / (rect[3]! - rect[1]!)
+              const normalized = [vertex[0]!, vertex[1]!, vertex[2]!, reader[0]! + nu * (reader[2]! - reader[0]!), reader[1]! + nv * (reader[3]! - reader[1]!)]
+              for (let c = 0; c < 5; c++) {
+                if (Math.abs(actual[q]![v]![c]! - normalized[c]!) > 1e-4) throw new Error(`${size} ${facing} ${face} quad ${q} vertex ${v}: ${actual[q]![v]!.join(', ')}, the game draws ${normalized.join(', ')}`)
+              }
+            }
+          }
+        }
+      }
+    })
+  }
+})
+
+describe('paintings', () => {
+  test('a painting hangs from its block as HangingEntity centers it', () => {
+    // a 1x1 painting facing south sits half a pixel off the north face of its block's south side
+    expect(paintingOffset(1, 1, 0)).toEqual([0.5, 0.5, 0.5 - 0.468_75])
+    // a 2x2 painting facing north is shifted half a block west and up
+    expect(paintingOffset(2, 2, 2)).toEqual([0, 1, 0.5 + 0.468_75])
+  })
+
+  test('the variant and facing come from metadata, spawn data or a client', () => {
+    const keys = ['shared_flags', 'air_supply', 'custom_name', 'custom_name_visible', 'silent', 'no_gravity', 'pose', 'ticks_frozen', 'direction', 'painting_variant']
+    expect(paintingInputFromEntity({ metadata: { 8: 5, 9: { variantId: 3 } } }, keys)).toEqual({ variant: 3, direction: 3 })
+    expect(paintingInputFromEntity({ metadata: { 8: 7 }, objectData: 4 }, keys.slice(0, 8).concat('painting_variant'))).toEqual({ variant: 7, direction: 1 })
+    expect(paintingInputFromEntity({ paintingVariant: 'Kebab', paintingDirection: 2 }, undefined)).toEqual({ variant: 'Kebab', direction: 2 })
+  })
+
+  test('every variant of the version draws, a datapack size too', () => {
+    const paintings = getEntityModelsStore(VERSION)!.getPaintings(VERSION)!
+    for (const [index, variant] of paintings.variants.entries()) {
+      expect(buildExportedPainting(VERSION, { variant: index, direction: 0 }), variant.id).toBeTruthy()
+    }
+    setServerPaintingVariants([{ id: 'test:huge', assetId: 'test:huge', width: 5, height: 6 }])
+    const huge = paintingQuads(buildExportedPainting(VERSION, { variant: 0, direction: 2 })!)
+    // 30 fronts and backs, 5 top and bottom edges, 6 left and right edges
+    expect(huge.front!.length).toBe(30)
+    expect(huge.back!.length).toBe(30 + 10 + 12)
+    setServerPaintingVariants(undefined)
+  })
+})
+
+describe('armor', () => {
+  test('a zombie wears the armor layers the game draws, a dyed piece tinted', () => {
+    const zombie = getExportedEntity(VERSION, 'zombie')!
+    expect(Object.keys(zombie.armor!).sort()).toEqual(['chest', 'feet', 'head', 'legs'])
+    const look = exportedEntityLook(zombie, { equipment: { head: 'iron_helmet', chest: 'leather_chestplate' }, equipmentColors: { chest: 0x33_66_99 } })
+    const armor = look.filter(({ key }) => key.startsWith('armor/'))
+    expect(armor.some(({ key, entry }) => key.startsWith('armor/head/') && (entry as EntityModelEntry).texture?.includes('iron'))).toBe(true)
+    const dyed = armor.filter(({ key }) => key.startsWith('armor/chest/')).map(({ entry }) => (entry as EntityModelEntry).tint)
+    expect(dyed).toContain((0xff_33_66_99 | 0) >> 0)
+    const build = buildExportedEntity(VERSION, 'zombie', { equipment: { head: 'iron_helmet' } })!
+    expect(build.rig.armor).toBe(true)
+    expect(build.object.children.length).toBeGreaterThan(buildExportedEntity(VERSION, 'zombie')!.object.children.length)
+  })
+
+  test.each(dataVersions())('%s: zombies and skeletons wear the armor the game draws', version => {
+    for (const name of ['zombie', 'skeleton']) {
+      const armor = getExportedEntity(version, name)!.armor!
+      expect(Object.keys(armor).sort(), `${version} ${name}`).toEqual(['chest', 'feet', 'head', 'legs'])
+      expect(buildExportedEntity(version, name, { equipment: { chest: 'iron_chestplate', head: 'diamond_helmet' } })!.rig.armor).toBe(true)
+    }
+  })
+
+  test('armor stands, skeletons and piglins wear armor', () => {
+    for (const name of ['armor_stand', 'skeleton', 'piglin', 'drowned', 'husk', 'zombified_piglin']) {
+      expect(getExportedEntity(VERSION, name)?.armor?.chest?.diamond_chestplate, name).toBeTruthy()
+    }
   })
 })

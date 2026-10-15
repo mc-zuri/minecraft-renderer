@@ -66,9 +66,16 @@ import {
   prismarineToGameHeadAngles,
   type ExportedEntityBuild,
   type ExportedEntityRig,
+  buildExportedPainting,
+  exportedEntityLook,
+  PAINTING_SIGNATURE_USER_DATA_KEY,
+  paintingInputFromEntity,
+  paintingSignature,
   entityExportVersionFor,
   entityModelName,
+  getEntityModelsStore,
   getEntityModelsStoreFor,
+  isEntityModelsVersionCovered,
   loadEntityModels,
   onEntityModelsLoaded
 } from './entity/exportedEntityModels'
@@ -351,6 +358,11 @@ function metadataAsArray(metadata: unknown): unknown[] | undefined {
   return undefined
 }
 
+/** The painting entity's metadata keys (minecraft-data), to read its variant and direction. */
+function paintingMetadataKeys(mcData: IndexedData | undefined): string[] | undefined {
+  return (mcData as unknown as { entitiesByName?: Record<string, { metadataKeys?: string[] }> } | undefined)?.entitiesByName?.painting?.metadataKeys
+}
+
 function getEntityMesh(
   mcData: IndexedData | undefined,
   entity: import('prismarine-entity').Entity & { delete?: any; pos?: any; name?: any },
@@ -364,6 +376,17 @@ function getEntityMesh(
       const entityName = entityModelName(entity.name)
       // the exports load on demand: until the entity's is loaded, the older model, built again once it is
       void loadEntityModels(world.version)
+      if (entityName === 'painting') {
+        // PaintingRenderer's quads from the export, relative to the painting's block
+        const painting = buildExportedPainting(world.version, paintingInputFromEntity(entity as never, paintingMetadataKeys(mcData)))
+        if (painting) return painting
+        // the version's export loads: nothing yet, built again once it is
+        if (isEntityModelsVersionCovered(world.version) && !getEntityModelsStore(world.version)) {
+          const pending = new THREE.Group()
+          pending.userData[AWAITING_EXPORT_USER_DATA_KEY] = true
+          return pending
+        }
+      }
       const e = new Entity.EntityMesh(world.version, entityName, world, { ...overrides, lookInput: lookInputFromEntity(entity) })
 
       if (e.mesh) {
@@ -1430,10 +1453,27 @@ export class Entities {
         e.originalEntity.renderHints = entity.renderHints
       }
       const rig = mesh?.userData[EXPORTED_ENTITY_USER_DATA_KEY] as ExportedEntityRig | undefined
-      const awaiting = !rig && !!mesh?.userData[AWAITING_EXPORT_USER_DATA_KEY] && !!entity.name && !!getExportedEntity(this.worldRenderer.version, entityModelName(entity.name))
+      const awaiting =
+        !rig &&
+        !!mesh?.userData[AWAITING_EXPORT_USER_DATA_KEY] &&
+        !!entity.name &&
+        (entityModelName(entity.name) === 'painting' ? !!getEntityModelsStore(this.worldRenderer.version) : !!getExportedEntity(this.worldRenderer.version, entityModelName(entity.name)))
+      // a painting whose variant or facing changed (1.21 sets them with metadata)
+      const paintingSignatureNow = mesh?.userData[PAINTING_SIGNATURE_USER_DATA_KEY] as string | undefined
+      const paintingLoaded = awaiting && entityModelName(entity.name!) === 'painting'
+      if (mesh && (paintingLoaded || (paintingSignatureNow !== undefined && paintingSignature(paintingInputFromEntity(entity as never, paintingMetadataKeys(this.mcData))) !== paintingSignatureNow))) {
+        const rebuilt = getEntityMesh(this.mcData, entity, this.worldRenderer, this.entitiesOptions, { ...overrides, customModel: entity['customModel'] })
+        if (rebuilt) {
+          rebuilt.name = 'mesh'
+          e.remove(mesh)
+          disposeObject(mesh)
+          e.add(rebuilt)
+          mesh = rebuilt
+        }
+      }
       if (mesh && (rig || awaiting)) {
         const exported = getExportedEntity(this.worldRenderer.version, rig?.name ?? entityModelName(entity.name!))
-        if (exported && (awaiting || lookSignature(composeEntityLook(exported, lookInputFromEntity(entity))) !== rig!.signature)) {
+        if (exported && (awaiting || lookSignature(exportedEntityLook(exported, lookInputFromEntity(entity))) !== rig!.signature)) {
           const rebuilt = getEntityMesh(this.mcData, entity, this.worldRenderer, this.entitiesOptions, { ...overrides, customModel: entity['customModel'] })
           if (rebuilt) {
             rebuilt.name = 'mesh'
@@ -1742,6 +1782,9 @@ export class Entities {
       if (typeof headYawWorld === 'number' && Number.isFinite(headYawWorld)) {
         targetYaw = headYawWorld
       }
+    } else if (entity.name === 'painting' && e.children.find(c => c.name === 'mesh')?.userData[PAINTING_SIGNATURE_USER_DATA_KEY] !== undefined) {
+      // an exported painting turns itself from its facing
+      targetYaw = 0
     } else if (typeof entity.yaw === 'number' && Number.isFinite(entity.yaw)) {
       targetYaw = entity.yaw
     }
@@ -2029,10 +2072,14 @@ export class Entities {
     const mainHand = isPlayer || exported ? 'right' : 'left'
     this.addItemModel(entityMesh, mainHand, entity.equipment[0], isPlayer)
     this.addItemModel(entityMesh, mainHand === 'right' ? 'left' : 'right', entity.equipment[1], isPlayer)
-    addArmorModel(this.worldRenderer, entityMesh, 'feet', entity.equipment[2])
-    addArmorModel(this.worldRenderer, entityMesh, 'legs', entity.equipment[3], 2)
-    addArmorModel(this.worldRenderer, entityMesh, 'chest', entity.equipment[4])
-    addArmorModel(this.worldRenderer, entityMesh, 'head', entity.equipment[5])
+    // exported entities with armor draw the armor layers the game exported, rebuilt when the equipment changes
+    const exportedRig = entityMesh.children.find(child => child.name === 'mesh')?.userData[EXPORTED_ENTITY_USER_DATA_KEY] as ExportedEntityRig | undefined
+    if (!exportedRig?.armor) {
+      addArmorModel(this.worldRenderer, entityMesh, 'feet', entity.equipment[2])
+      addArmorModel(this.worldRenderer, entityMesh, 'legs', entity.equipment[3], 2)
+      addArmorModel(this.worldRenderer, entityMesh, 'chest', entity.equipment[4])
+      addArmorModel(this.worldRenderer, entityMesh, 'head', entity.equipment[5])
+    }
 
     // Update player-specific equipment
     if (isPlayer && entityMesh.playerObject) {
