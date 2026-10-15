@@ -110,6 +110,9 @@ const DEG_DIVISOR = f(180 / PI)
 /** The degrees to radians of the version: 1.8.9 `a / (180F / PI)`, later `a * (float) (PI / 180)`. */
 const toRad = (c: AnimContext, degrees: number) => (c.atLeast('1.9') ? f(degrees * DEG_TO_RAD) : f(degrees / DEG_DIVISOR))
 
+/** 1.8.9's int arm pose (0 none, 1 item, 3 blocking), also from the ArmPose names of a state made for 1.9 (1.9 and 1.9.2 draw from the 1.8.9 export). */
+const intArmPose = (pose: unknown) => (typeof pose === 'number' ? pose : pose === 'ITEM' ? 1 : pose === 'BLOCK' ? 3 : 0)
+
 /** A part the drawn layer lacks (a feature layer exports only the parts it draws): poses go nowhere. */
 const detached = (name: string) => new PartPose(name, `<detached ${name}>`, [], [])
 
@@ -175,8 +178,8 @@ export class BiPedModel extends LegacyEntityModel {
       this.leftArmPose = state['model.field_13384'] ?? 'EMPTY'
       this.rightArmPose = state['model.field_13385'] ?? 'EMPTY'
     } else {
-      this.leftArmPose = num(state, 'model.leftArmPose')
-      this.rightArmPose = num(state, 'model.rightArmPose')
+      this.leftArmPose = intArmPose(state['model.leftArmPose'])
+      this.rightArmPose = intArmPose(state['model.rightArmPose'])
       this.aiming = state['model.aiming'] ?? false
     }
   }
