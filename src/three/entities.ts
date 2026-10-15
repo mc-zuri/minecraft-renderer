@@ -92,7 +92,7 @@ import { disposeObject, loadNearestFilterTexture, loadTexture, loadThreeJsTextur
 import { armorModel, armorTextures, elytraTexture } from './entity/armorModels'
 import { ExportedEntityAnimator, applyAnimationOffsets, poseName } from './entity/exportedAnimations'
 import { EntityAnimTracker, entityAnimState, entityEraState, type EntityAnimInput } from './entity/entityAnimState'
-import { thrownItemOf } from './entity/thrownItems'
+import { BLOCK_ENTITIES, fallingBlockState, thrownItemOf } from './entity/thrownItems'
 import './entity/drivers'
 import { animContext } from './entity/setupAnim'
 import { WorldRendererThree } from './worldRendererThree'
@@ -1593,16 +1593,13 @@ export class Entities {
           mesh.position.set(0, 0.1 * itemEntity.scale, 0)
           group.additionalCleanup = () => object.cleanup?.()
         }
-      } else if (
-        entity.name === 'item' ||
-        entity.name === 'tnt' ||
-        entity.name === 'falling_block'
-      ) {
+      } else if (entity.name === 'item' || BLOCK_ENTITIES[itemName]) {
+        const blockEntity = BLOCK_ENTITIES[itemName]
         const item =
-          entity.name === 'tnt' || entity.type === 'projectile'
-            ? { name: entity.name }
-            : entity.name === 'falling_block'
-              ? { blockState: entity['objectData'] }
+          blockEntity === 'tnt'
+            ? { name: 'tnt' }
+            : blockEntity === 'falling_block'
+              ? fallingBlockState(entity['objectData'], this.worldRenderer.version)
               : metadataAsArray(entity.metadata)?.find((m: any) => typeof m === 'object' && m?.itemCount)
         if (item) {
           const object = this.getItemMesh(
@@ -1614,7 +1611,7 @@ export class Entities {
           )
           if (object) {
             mesh = object.mesh
-            if (entity.name === 'item' || entity.type === 'projectile') {
+            if (entity.name === 'item') {
               mesh.scale.set(0.5, 0.5, 0.5)
               mesh.position.set(0, entity.name === 'item' ? 0.2 : 0.1, 0)
             } else {

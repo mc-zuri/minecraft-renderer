@@ -1,6 +1,6 @@
 import { createRequire } from 'module'
 import { describe, expect, test } from 'vitest'
-import { THROWN_ITEMS, thrownItemOf } from './thrownItems'
+import { BLOCK_ENTITIES, THROWN_ITEMS, fallingBlockState, thrownItemOf } from './thrownItems'
 import { entityModelName } from './exportedEntityModels'
 
 const require = createRequire(import.meta.url)
@@ -34,5 +34,19 @@ describe('item-like entities', () => {
     expect(thrownItemOf(entityModelName('FireworksRocketEntity'), items)).toEqual({ item: 'fireworks', scale: 1 })
     expect(thrownItemOf(entityModelName('Fireball'), items)).toEqual({ item: 'fire_charge', scale: 3 })
     expect(thrownItemOf(entityModelName('ThrownPotion'), items)).toEqual({ item: 'potion', scale: 1 })
+  })
+})
+
+describe('block entities', () => {
+  test("TNT and falling blocks under every version's name", () => {
+    expect(['PrimedTnt', 'activated_tnt', 'tnt'].map(name => BLOCK_ENTITIES[entityModelName(name)])).toEqual(['tnt', 'tnt', 'tnt'])
+    expect(['FallingSand', 'falling_objects', 'falling_block'].map(name => BLOCK_ENTITIES[entityModelName(name)])).toEqual(['falling_block', 'falling_block', 'falling_block'])
+  })
+
+  test("a falling block's state: the state id from 1.13, the block id and data before, nothing for air", () => {
+    // sand (12), red sand (data 1): 12 | 1 << 12
+    expect(fallingBlockState(12 | (1 << 12), '1.12.2')).toEqual({ blockState: (12 << 4) | 1 })
+    expect(fallingBlockState(66, '1.20.4')).toEqual({ blockState: 66 })
+    expect(fallingBlockState(0, '1.20.4')).toBeUndefined()
   })
 })

@@ -1070,7 +1070,8 @@ export function buildExportedPainting(version: string, input: PaintingInput): TH
   const store = getEntityModelsStore(version)
   const paintings = store?.getPaintings(version)
   if (!paintings) return undefined
-  const variant = resolvePaintingVariant(paintings, input.variant)
+  // no variant known: the synched data's default, kebab (Painting.defineSynchedData)
+  const variant = resolvePaintingVariant(paintings, input.variant ?? 'kebab')
   if (!variant) return undefined
   const quads = paintings.templates[`${variant.width}x${variant.height}`] ?? paintingQuads(variant.width, variant.height)
   const group = new THREE.Group()

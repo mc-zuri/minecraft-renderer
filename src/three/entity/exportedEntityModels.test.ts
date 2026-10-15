@@ -470,6 +470,10 @@ describe('paintings', () => {
     expect(paintingInputFromEntity({ paintingVariant: 'Kebab', paintingDirection: 2 }, undefined)).toEqual({ variant: 'Kebab', direction: 2 })
   })
 
+  test('a painting whose variant is not known draws the synched default, kebab', () => {
+    for (const version of ['1.16.5', '26.3']) expect(buildExportedPainting(version, { variant: undefined, direction: 0 })?.name).toMatch(/^exported_painting_(minecraft:)?kebab$/)
+  })
+
   test('every variant of the version draws, a datapack size too', () => {
     const paintings = getEntityModelsStore(VERSION)!.getPaintings(VERSION)!
     for (const [index, variant] of paintings.variants.entries()) {
