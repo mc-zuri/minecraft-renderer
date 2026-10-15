@@ -115,6 +115,16 @@ export const TWEEN_DURATION = ENTITY_TWEEN_DURATION_MS
 
 const degreesToRadians = (degrees: number) => degrees * (Math.PI / 180)
 
+/** The player model's own head parts (skinview3d's), not the parts of what it wears there (a skull's model has a head too). */
+function forEachPlayerHead(entity: THREE.Object3D, apply: (head: THREE.Object3D) => void) {
+  const visit = (object: THREE.Object3D) => {
+    if (object.name === 'player_head_item') return
+    if (object.name === 'head') apply(object)
+    for (const child of object.children) visit(child)
+  }
+  visit(entity)
+}
+
 function convert2sComplementToHex(complement: number) {
   if (complement < 0) {
     complement = (0xff_ff_ff_ff + complement + 1) >>> 0
@@ -546,6 +556,10 @@ export class Entities {
         const mesh = e.children.find(child => child.name === 'mesh')
         if (mesh?.userData[AWAITING_EXPORT_USER_DATA_KEY] && e.originalEntity) this.update(e.originalEntity, e.userData[LAST_OVERRIDES_USER_DATA_KEY] ?? {})
       }
+      // and the head items players wear
+      for (const e of [this.playerEntity, ...Object.values(this.entities)]) {
+        if (e?.playerObject && e.originalEntity) this.updatePlayerHeadItem(e, e.originalEntity)
+      }
     })
   }
 
@@ -838,16 +852,10 @@ export class Entities {
         vehicleYaw: vehicleYaw!
       })
       entity.rotation.set(0, resolved.bodyYaw, 0)
-      entity.traverse(child => {
-        if (child.name !== 'head') return
-        child.rotation.set(resolved.headPitch, resolved.headYaw, 0)
-      })
+      forEachPlayerHead(entity, head => head.rotation.set(resolved.headPitch, resolved.headYaw, 0))
     } else {
       entity.rotation.set(0, rotation.yaw, 0)
-      entity.traverse(child => {
-        if (child.name !== 'head') return
-        child.rotation.set(-rotation.pitch, 0, 0)
-      })
+      forEachPlayerHead(entity, head => head.rotation.set(-rotation.pitch, 0, 0))
     }
 
     this.syncArmorPositions(entity)
@@ -1362,7 +1370,14 @@ export class Entities {
     }
     if (!input) return
     const built = buildHumanoidHeadItem(this.worldRenderer.version, input)
-    if (!built) return
+    if (!built) {
+      // the version's export still loads: built once it is
+      if (entityExportVersionFor(this.worldRenderer.version, 'zombie') && !getEntityModelsStoreFor(this.worldRenderer.version, 'zombie')) {
+        head.userData._headItemSignature = undefined
+        void loadEntityModels(this.worldRenderer.version)
+      }
+      return
+    }
     const frame = new THREE.Group()
     frame.name = 'player_head_item'
     frame.matrixAutoUpdate = false
