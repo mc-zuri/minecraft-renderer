@@ -70,6 +70,7 @@ import {
   exportedEntitySignature,
   setSkinUrlResolver,
   updateExportedHeadAnchor,
+  applyExportedSetupAnim,
   headItemDisplayTransform,
   resetExportedPose,
   PAINTING_SIGNATURE_USER_DATA_KEY,
@@ -87,6 +88,8 @@ import { composeEntityLook } from 'mc-assets/dist/entityModels'
 import { disposeObject, loadNearestFilterTexture, loadTexture, loadThreeJsTextureFromUrl } from './threeJsUtils'
 import { armorModel, armorTextures, elytraTexture } from './entity/armorModels'
 import { ExportedEntityAnimator, applyAnimationOffsets, poseName } from './entity/exportedAnimations'
+import { EntityAnimTracker, entityAnimState, type EntityAnimInput } from './entity/entityAnimState'
+import './entity/drivers'
 import { WorldRendererThree } from './worldRendererThree'
 import { IndexedData } from 'minecraft-data'
 import { ItemSpecificContextProperties } from '../playerState/types'
@@ -435,6 +438,10 @@ const EXPORTED_BUILD_USER_DATA_KEY = '_exportedEntityBuild'
 const EXPORTED_WALK_USER_DATA_KEY = '_exportedEntityWalk'
 /** The keyframe animations an exported entity plays (warden, frog, camel, sniffer...). */
 const EXPORTED_ANIMATOR_USER_DATA_KEY = '_exportedEntityAnimator'
+/** The client side ticking of an exported entity whose models' setupAnim is ported (see entityAnimState). */
+const ANIM_TRACKER_USER_DATA_KEY = '_entityAnimTracker'
+/** What the tracker reads of the entity, kept from its updates. */
+const ANIM_INPUT_USER_DATA_KEY = '_entityAnimInput'
 
 /** Item-like entities exported as a single item (ThrownItemRenderer): the item and the renderer's scale. */
 function exportedItemEntity(version: string, name: string): { item: string; scale: number } | undefined {
@@ -696,7 +703,17 @@ export class Entities {
 
       const exportedRig = entity.children.find(child => child.name === 'mesh')?.userData[EXPORTED_ENTITY_USER_DATA_KEY] as ExportedEntityRig | undefined
       const exportedWalk = entity.userData[EXPORTED_WALK_USER_DATA_KEY] as HorseHeadAnimationState | undefined
-      if (exportedRig && exportedWalk && exportedRig.name !== 'armor_stand') {
+      const animTracker = entity.userData[ANIM_TRACKER_USER_DATA_KEY] as EntityAnimTracker | undefined
+      const animInput = entity.userData[ANIM_INPUT_USER_DATA_KEY] as EntityAnimInput | undefined
+      if (exportedRig?.anims.length && animTracker && animInput) {
+        // the models' own animation code, from the render state the game would extract
+        const now = performance.now()
+        const last = (entity.userData._animLastFrame as number | undefined) ?? now
+        entity.userData._animLastFrame = now
+        animTracker.setInput(animInput)
+        animTracker.advance(Math.min((now - last) / 1000, 1))
+        applyExportedSetupAnim(exportedRig, entityAnimState(animTracker, animInput))
+      } else if (exportedRig && exportedWalk && exportedRig.name !== 'armor_stand') {
         const walk = updateHorseHeadAnimationFrame(exportedWalk, dt)
         const angles = prismarineToGameHeadAngles(entity.userData._exportedBodyYaw ?? 0, entity.userData._exportedHeadYaw ?? entity.userData._exportedBodyYaw ?? 0, entity.userData._exportedPitch ?? 0)
         const animator = entity.userData[EXPORTED_ANIMATOR_USER_DATA_KEY] as ExportedEntityAnimator | undefined
@@ -1285,6 +1302,51 @@ export class Entities {
     const e = this.entities[entityId]
     const animator = e?.userData[EXPORTED_ANIMATOR_USER_DATA_KEY] as ExportedEntityAnimator | undefined
     animator?.event(status)
+    ;(e?.userData[ANIM_TRACKER_USER_DATA_KEY] as EntityAnimTracker | undefined)?.event(status)
+  }
+
+  /**
+   * An entity's arm swing (the animate packet's swing animations: 0 the main hand, 3 the off hand): the models' attack
+   * poses follow it.
+   */
+  handleEntitySwing(entityId: number | string, animation: number) {
+    const tracker = this.entities[entityId]?.userData[ANIM_TRACKER_USER_DATA_KEY] as EntityAnimTracker | undefined
+    if (animation === 0 || animation === 3) tracker?.swingArm(animation === 0 ? 'MAIN_HAND' : 'OFF_HAND')
+  }
+
+  /** What the client tick and render state of an exported entity read, from its latest update. */
+  private updateAnimInput(e: SceneEntity, entity: SceneEntity['originalEntity'], meta: Record<string, unknown>) {
+    if (!e.userData[ANIM_TRACKER_USER_DATA_KEY]) e.userData[ANIM_TRACKER_USER_DATA_KEY] = new EntityAnimTracker(entityModelName(entity.name ?? ''), this.worldRenderer.version)
+    const previous = e.userData[ANIM_INPUT_USER_DATA_KEY] as EntityAnimInput | undefined
+    const array = metadataAsArray(entity.metadata)
+    const data: Record<number, unknown> = {}
+    if (array) {
+      for (const [index, value] of array.entries()) if (value !== undefined) data[index] = value
+    } else {
+      Object.assign(data, entity.metadata ?? {})
+    }
+    const equipment: Record<string, string | undefined> = {}
+    const slots = ['mainhand', 'offhand', 'feet', 'legs', 'chest', 'head', 'body', 'saddle']
+    for (const [index, item] of ((entity as { equipment?: Array<{ name?: string } | null | undefined> }).equipment ?? []).entries()) {
+      if (item?.name && slots[index]) equipment[slots[index]] = item.name
+    }
+    const customName = typeof meta.custom_name === 'string' ? meta.custom_name : undefined
+    e.userData[ANIM_INPUT_USER_DATA_KEY] = {
+      name: entityModelName(entity.name ?? ''),
+      version: this.worldRenderer.version,
+      meta,
+      data,
+      pose: poseName(meta.pose, this.worldRenderer.version),
+      bodyYaw: previous?.bodyYaw ?? (entity.yaw || 0),
+      headYaw: previous?.headYaw ?? ((entity as { headYaw?: number }).headYaw ?? entity.yaw ?? 0),
+      pitch: previous?.pitch ?? (entity.pitch || 0),
+      position: previous?.position,
+      onGround: (entity as { onGround?: boolean }).onGround,
+      isPassenger: !!(entity as { vehicle?: unknown }).vehicle || e.userData._passengerVehicleId != null || e.userData._boatPassengerVehicleId != null,
+      equipment,
+      customName,
+      renderHints: e.userData.renderHints as EntityAnimInput['renderHints']
+    } satisfies EntityAnimInput
   }
 
   /** Blocks an exported model draws (minecart contents, mooshroom mushrooms, the snow golem's pumpkin), and an item worn on the head. */
@@ -1571,6 +1633,7 @@ export class Entities {
     this.updateEntityEquipment(e, entity)
 
     const meta = getGeneralEntitiesMetadata(entity, this.mcData)
+    if (mesh?.userData[EXPORTED_ENTITY_USER_DATA_KEY]) this.updateAnimInput(e, entity, meta as Record<string, unknown>)
 
     const meta0 = metadataAsArray(entity.metadata)?.[0] ?? (entity.metadata as { 0?: unknown } | undefined)?.[0]
     const isInvisible =
@@ -1819,6 +1882,14 @@ export class Entities {
       e.userData._exportedHeadYaw = typeof headYaw === 'number' && Number.isFinite(headYaw) ? headYaw : e.userData._exportedBodyYaw
       if (!headRotationOnly && entity.position && Number.isFinite(entity.position.x) && Number.isFinite(entity.position.z)) {
         setHorseHeadAnimationPosition(e.userData[EXPORTED_WALK_USER_DATA_KEY], entity.position)
+      }
+      const animInput = e.userData[ANIM_INPUT_USER_DATA_KEY] as EntityAnimInput | undefined
+      if (animInput) {
+        animInput.bodyYaw = e.userData._exportedBodyYaw
+        animInput.headYaw = e.userData._exportedHeadYaw
+        animInput.pitch = e.userData._exportedPitch
+        if (!headRotationOnly && entity.position && Number.isFinite(entity.position.x)) animInput.position = { x: entity.position.x, y: entity.position.y, z: entity.position.z }
+        animInput.onGround = (entity as { onGround?: boolean }).onGround
       }
     }
     const cameraSynced = usesCameraSyncedVehiclePosition(entity)

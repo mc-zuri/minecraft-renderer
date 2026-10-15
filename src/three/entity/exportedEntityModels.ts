@@ -31,6 +31,7 @@ import {
 } from 'mc-assets/dist/entityModels'
 import { createCanvas } from '../../lib/utils'
 import { loadThreeJsTextureFromUrlSync } from '../threeJsUtils'
+import { ANIM_MODELS, AnimModel, ModelPose, animContext, type AnimState, type PartPose } from './setupAnim'
 
 /**
  * Entity models exported from the game (mc-assets' dist/entityModels.json, made by minecraft-model-generator): the
@@ -493,6 +494,20 @@ export type ExportedEntityRig = {
   bones: Map<string, ExportedPart>
   /** the head item, drawn from the anchor's frame (see {@link updateExportedHeadAnchor}) */
   head?: { anchor: EntityHeadAnchor; group: THREE.Group }
+  /**
+   * The drawn models whose animation code is ported (setupAnim): each poses its parts from the entity's render state
+   * every frame, and the parts' bones follow.
+   */
+  anims: ExportedAnim[]
+}
+
+/** A drawn model and its ported setupAnim, with the bones of every entry drawing its parts. */
+export type ExportedAnim = {
+  modelClass: string
+  layer: string
+  pose: ModelPose
+  model: AnimModel
+  links: Array<{ part: PartPose; bone: ExportedPart }>
 }
 
 export const EXPORTED_ENTITY_USER_DATA_KEY = '_exportedEntityRig'
@@ -541,7 +556,14 @@ export function materialForEntry(entry: Pick<EntityModelEntry, 'renderType' | 't
 }
 
 /** One model entry as a SkinnedMesh under a group carrying the entry's transform. */
-export function buildModelEntry(entry: EntityModelEntry, layer: EntityModelLayer, parts: Map<string, ExportedPart[]>, version?: string, rigBones?: Map<string, ExportedPart>): THREE.Group {
+export function buildModelEntry(
+  entry: EntityModelEntry,
+  layer: EntityModelLayer,
+  parts: Map<string, ExportedPart[]>,
+  version?: string,
+  rigBones?: Map<string, ExportedPart>,
+  entryParts?: Map<string, ExportedPart>
+): THREE.Group {
   const holder = new THREE.Group()
   holder.name = `exported_${entry.model}${entry.part ?? ''}`
   holder.matrixAutoUpdate = false
@@ -638,6 +660,7 @@ export function buildModelEntry(entry: EntityModelEntry, layer: EntityModelLayer
     part.rest.rotation.copy(part.bone.rotation)
     part.rest.scale.copy(part.bone.scale)
   }
+  if (entryParts) for (const [path, part] of byPath) entryParts.set(path, part)
 
   if (entry.texture) {
     // uvs are 0 to 1 over the whole texture, as the game draws them: the version's own texture (or a resource pack's of
@@ -675,14 +698,17 @@ export function buildExportedEntity(version: string, name: string, input: Export
   if (!look.length) return undefined
   const object = new THREE.Group()
   object.name = `exported_entity_${name}`
-  const rig: ExportedEntityRig = { name, signature: lookSignature(look, input.head), parts: new Map(), armor: !!entity.armor, bones: new Map() }
+  const rig: ExportedEntityRig = { name, signature: lookSignature(look, input.head), parts: new Map(), armor: !!entity.armor, bones: new Map(), anims: [] }
   const result: ExportedEntityBuild = { object, rig, blocks: [], items: [], custom: [] }
+  const context = animContext(version, animation => store.getAnimation(version, animation))
   for (const { entry } of look) {
     if (entry.type === 'model') {
       if (entry.renderType === 'water_mask') continue // the boat's water patch: the renderer masks water itself
       const layer = store.getModel(version, entry.model)
       if (!layer) continue
-      object.add(buildModelEntry(entry, layer, rig.parts, version, rig.bones))
+      const entryParts = new Map<string, ExportedPart>()
+      object.add(buildModelEntry(entry, layer, rig.parts, version, rig.bones, entryParts))
+      linkExportedAnim(rig, entry, layer, entryParts, context, entityExportVersionFor(version, name) ?? version)
     } else if (entry.type === 'block') {
       result.blocks.push(entry)
     } else if (entry.type === 'item') {
@@ -721,6 +747,63 @@ export function buildExportedEntity(version: string, name: string, input: Export
   object.userData[EXPORTED_ENTITY_USER_DATA_KEY] = rig
   return result
 }
+
+/**
+ * Links an entry's bones to the model that draws it: one ModelPose per drawn model (layer and model class), posed by the
+ * model class's ported setupAnim. A model's root is the drawn part (since 1.21.2 a model draws its root, which may be a
+ * part of a layer); before, models drew their parts one by one and are posed in the whole layer.
+ */
+function linkExportedAnim(
+  rig: ExportedEntityRig,
+  entry: EntityModelEntry,
+  layer: EntityModelLayer,
+  entryParts: Map<string, ExportedPart>,
+  context: ReturnType<typeof animContext>,
+  exportVersion: string
+) {
+  const modelClass = (entry as { modelClass?: string }).modelClass
+  const Port = modelClass ? ANIM_MODELS[modelClass] : undefined
+  if (!modelClass || !Port) return
+  // models drew themselves part by part before render states (1.21.2): their parts are posed in the whole layer
+  const legacy = versionToNumber(exportVersion) < versionToNumber('1.21.2')
+  const modelRoot = legacy ? '' : (entry.part ?? '')
+  let anim = rig.anims.find(other => other.layer === `${entry.model}${modelRoot}` && other.modelClass === modelClass)
+  if (!anim) {
+    const pose = new ModelPose(descend(layer.root, modelRoot))
+    // visibility as the look's rest pose has it (setupAnim of the game at rest); the port changes it where the game does
+    for (const [path, rest] of Object.entries(entry.pose ?? {})) {
+      const part = pose.byPath.get(legacy ? `${entry.part ?? ''}${path}` : path)
+      if (!part) continue
+      if (rest.visible === false) part.visible = false
+      if (rest.skipDraw) part.skipDraw = true
+    }
+    anim = { modelClass, layer: `${entry.model}${modelRoot}`, pose, model: new Port(pose, context), links: [] }
+    rig.anims.push(anim)
+  }
+  const prefix = legacy ? (entry.part ?? '') : ''
+  for (const [path, bone] of entryParts) {
+    const part = anim.pose.byPath.get(`${prefix}${path}`)
+    if (part) anim.links.push({ part, bone })
+  }
+}
+
+/** Poses every ported model of the rig from the render state (a copy each: a model may write into it) and moves the bones. */
+export function applyExportedSetupAnim(rig: ExportedEntityRig, state: AnimState) {
+  for (const anim of rig.anims) {
+    anim.model.setupAnim({ ...state })
+    for (const { part, bone } of anim.links) {
+      bone.bone.position.set(part.x, part.y, part.z)
+      bone.bone.rotation.set(part.xRot, part.yRot, part.zRot, 'ZYX')
+      if (part.visible) bone.bone.scale.set(part.xScale, part.yScale, part.zScale)
+      else bone.bone.scale.set(0, 0, 0)
+      bone.hidden = part.visible ? undefined : new THREE.Vector3(part.xScale, part.yScale, part.zScale)
+      if (bone.cubes) bone.cubes.scale.setScalar(part.skipDraw ? 0 : 1)
+    }
+  }
+}
+
+/** Does every drawn model of the rig have its animation ported (the generic head look and limb swing are then not needed). */
+export const exportedRigAnimated = (rig: ExportedEntityRig) => rig.anims.length > 0
 
 const anchorLocal = new THREE.Matrix4()
 const anchorPosition = new THREE.Vector3()
