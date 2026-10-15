@@ -42,7 +42,8 @@ import {
   type EntityRenderHints,
   type Vec3Like,
   usesCameraSyncedVehiclePosition,
-  isRideableMinecartEntityName
+  isRideableMinecartEntityName,
+  samePosition
 } from './entity/interpolationPolicy'
 import { getMesh } from './entity/EntityMesh'
 import {
@@ -2029,15 +2030,21 @@ export class Entities {
         if (!e.userData._tweenTarget) {
           e.userData._tweenTarget = { x: currentWorld.x, y: currentWorld.y, z: currentWorld.z }
         }
-        // Stop previous position tween to prevent accumulation
-        e.userData._posTween?.stop()
-        // Tween a separate target object, apply via proxy on each update
-        e.userData._posTween = new TWEEN.Tween(e.userData._tweenTarget)
-          .to({ x: entity.position.x, y: entity.position.y, z: entity.position.z }, ANIMATION_DURATION)
-          .onUpdate(() => {
-            e.position.set(e.userData._tweenTarget.x, e.userData._tweenTarget.y, e.userData._tweenTarget.z)
-          })
-          .start()
+        const to = { x: entity.position.x, y: entity.position.y, z: entity.position.z }
+        // an update to where it already moves (a look, metadata) keeps the move going
+        const movingTo = e.userData._posTweenTo as { x: number; y: number; z: number } | undefined
+        if (!(e.userData._posTween?.isPlaying() && movingTo && samePosition(movingTo, to, 1e-9))) {
+          // Stop previous position tween to prevent accumulation
+          e.userData._posTween?.stop()
+          e.userData._posTweenTo = to
+          // Tween a separate target object, apply via proxy on each update
+          e.userData._posTween = new TWEEN.Tween(e.userData._tweenTarget)
+            .to(to, ANIMATION_DURATION)
+            .onUpdate(() => {
+              e.position.set(e.userData._tweenTarget.x, e.userData._tweenTarget.y, e.userData._tweenTarget.z)
+            })
+            .start()
+        }
       }
       const horseAnimation = e.userData[HORSE_HEAD_ANIMATION_USER_DATA_KEY] as HorseHeadAnimationState | undefined
       if (!headRotationOnly && horseAnimation && Number.isFinite(entity.position.x) && Number.isFinite(entity.position.z)) {

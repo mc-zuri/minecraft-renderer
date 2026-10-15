@@ -278,3 +278,11 @@ test.each([
   const seat = getHorsePassengerWorldPosition({ x: 0, y: 64, z: 0 }, name, height)
   expect(seat.y).toBeCloseTo(64 + expectedFeetOffset, 5)
 })
+
+// EntityRenderDispatcher draws an entity at Mth.lerp(partialTick, xOld, x): given where the game shows it each client
+// tick (mineflayer's entityInterpolation), the renderer moves there over one tick; the local vehicle stays instant
+test('an entity given its shown position of each tick moves there over one tick', () => {
+  expect(getEntityTweenDurationMs({ tickInterpolated: true }, false)).toBe(50)
+  expect(getEntityTweenDurationMs({ tickInterpolated: true }, true)).toBe(0)
+  expect(getEntityTweenDurationMs({ tickInterpolated: true, renderHints: { localVehicle: true } }, false)).toBe(0)
+})

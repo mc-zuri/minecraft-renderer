@@ -2,6 +2,8 @@ import { versionToNumber } from '../../lib/utils'
 
 export const LOCAL_MOVEMENT_TWEEN_DURATION_MS = 50
 export const ENTITY_TWEEN_DURATION_MS = 120
+/** One client tick: an entity given where the game shows it each tick moves there over it (Mth.lerp(partialTick, xOld, x)). */
+export const ENTITY_TICK_TWEEN_DURATION_MS = 50
 export const SPECTATING_CAMERA_TWEEN_DURATION_MS = 150
 export const CAMERA_POSITION_EPSILON = 1e-4
 
@@ -30,6 +32,8 @@ export type EntityRenderHints = {
 
 export type EntityWithRenderHints = {
   renderHints?: EntityRenderHints
+  /** The position is the shown one of a client tick (mineflayer's entityInterpolation), not the server's latest. */
+  tickInterpolated?: boolean
 }
 
 export function usesCameraSyncedVehiclePosition(entity: EntityWithRenderHints | undefined): boolean {
@@ -52,6 +56,7 @@ export function applyLocalHorseCameraYawLock(sceneEntity: { rotation: { y: numbe
 export function getEntityTweenDurationMs(entity: EntityWithRenderHints | undefined, justAdded: boolean): number {
   if (justAdded) return 0
   if (usesCameraSyncedVehiclePosition(entity)) return 0
+  if (entity?.tickInterpolated) return ENTITY_TICK_TWEEN_DURATION_MS
   return ENTITY_TWEEN_DURATION_MS
 }
 
