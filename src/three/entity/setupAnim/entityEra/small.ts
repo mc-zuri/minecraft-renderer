@@ -573,11 +573,11 @@ export class ParrotModel extends AnimModel {
         this.tail.y = f(f(21.07) + y)
         break
       }
-      case 'STANDING':
-        this.leftLeg.xRot = f(this.leftLeg.xRot + walkCos(this, pos, speed))
-        this.rightLeg.xRot = f(this.rightLeg.xRot + walkCos(this, pos, speed, PI))
-      // falls through
       default: {
+        if (pose === 'STANDING') {
+          this.leftLeg.xRot = f(this.leftLeg.xRot + walkCos(this, pos, speed))
+          this.rightLeg.xRot = f(this.rightLeg.xRot + walkCos(this, pos, speed, PI))
+        }
         const bob = f(flap * f(0.3))
         this.head.y = f(f(15.69) + bob)
         this.tail.xRot = f(f(1.015) + f(f(cos(f(pos * f(0.6662))) * f(0.3)) * speed))
