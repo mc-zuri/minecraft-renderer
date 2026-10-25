@@ -9,7 +9,7 @@ overrides:
   prismarine-world: github:zardoy/prismarine-world#next-era
   '@types/three': 0.184.0
   prismarine-chunk: file:../prismarine-chunk
-  minecraft-data: link:../../mineflayer-monorepo/packages/minecraft-data
+  minecraft-data: link:../minecraft-data
 
 importers:
 
@@ -32,10 +32,10 @@ importers:
         version: 3.3.0
       mc-bridge:
         specifier: ^0.1.3
-        version: 0.1.3(minecraft-data@..+mineflayer-monorepo+packages+minecraft-data)
+        version: 0.1.3(minecraft-data@minecraft-data)
       minecraft-data:
-        specifier: link:../../mineflayer-monorepo/packages/minecraft-data
-        version: link:../../mineflayer-monorepo/packages/minecraft-data
+        specifier: link:../minecraft-data
+        version: link:../minecraft-data
       mineflayer-mouse:
         specifier: ^0.1.24
         version: 0.1.24
@@ -138,10 +138,10 @@ importers:
         version: 3.8.4
       prismarine-block:
         specifier: github:zardoy/prismarine-block#next-era
-        version: https://codeload.github.com/zardoy/prismarine-block/tar.gz/853c559bff2b402863ee9a75b125a3ca320838f9(prismarine-registry@1.11.0)
+        version: https://codeload.github.com/zardoy/prismarine-block/tar.gz/401a296892fbde312ade34685fdc2db3d31668ad(prismarine-registry@1.11.0)
       prismarine-chunk:
         specifier: file:../prismarine-chunk
-        version: file:../prismarine-chunk(minecraft-data@..+mineflayer-monorepo+packages+minecraft-data)
+        version: file:../prismarine-chunk(minecraft-data@minecraft-data)
       prismarine-world:
         specifier: github:zardoy/prismarine-world#next-era
         version: https://codeload.github.com/zardoy/prismarine-world/tar.gz/ab2146c9933eef3247c3f64446de4ccc2c484c7c
@@ -1201,6 +1201,7 @@ packages:
 
   esbuild-plugin-polyfill-node@0.3.0:
     resolution: {integrity: sha512-SHG6CKUfWfYyYXGpW143NEZtcVVn8S/WHcEOxk62LuDXnY4Zpmc+WmxJKN6GMTgTClXJXhEM5KQlxKY6YjbucQ==}
+    deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
     peerDependencies:
       esbuild: '*'
 
@@ -1809,10 +1810,6 @@ packages:
     resolution: {tarball: https://codeload.github.com/zardoy/prismarine-block/tar.gz/401a296892fbde312ade34685fdc2db3d31668ad}
     version: 1.23.0
 
-  prismarine-block@https://codeload.github.com/zardoy/prismarine-block/tar.gz/853c559bff2b402863ee9a75b125a3ca320838f9:
-    resolution: {tarball: https://codeload.github.com/zardoy/prismarine-block/tar.gz/853c559bff2b402863ee9a75b125a3ca320838f9}
-    version: 1.21.0
-
   prismarine-chat@1.12.0:
     resolution: {integrity: sha512-+1QBUn4WGXbAGwoGwJy31/FvH6JtTBHh//yU0xwOiVnBO71+6Ij0hYMd9PzTTAwR9bySfl/YLltGPBftUAOYOA==}
 
@@ -2273,6 +2270,7 @@ packages:
 
   uuid@8.3.2:
     resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   validate-npm-package-license@3.0.4:
@@ -3906,9 +3904,9 @@ snapshots:
       maxrects-packer: '@zardoy/maxrects-packer@2.7.4'
       zod: 3.25.76
 
-  mc-bridge@0.1.3(minecraft-data@..+mineflayer-monorepo+packages+minecraft-data):
+  mc-bridge@0.1.3(minecraft-data@minecraft-data):
     dependencies:
-      minecraft-data: link:../../mineflayer-monorepo/packages/minecraft-data
+      minecraft-data: link:../minecraft-data
 
   md5.js@1.3.5:
     dependencies:
@@ -3942,7 +3940,7 @@ snapshots:
       debug: 4.4.3
       endian-toggle: 0.0.0
       lodash.merge: 4.6.2
-      minecraft-data: link:../../mineflayer-monorepo/packages/minecraft-data
+      minecraft-data: link:../minecraft-data
       minecraft-folder-path: 1.2.0
       node-fetch: 2.7.0
       node-rsa: 0.4.2
@@ -3969,12 +3967,12 @@ snapshots:
 
   mineflayer@4.33.0:
     dependencies:
-      minecraft-data: link:../../mineflayer-monorepo/packages/minecraft-data
+      minecraft-data: link:../minecraft-data
       minecraft-protocol: 1.62.0
-      prismarine-biome: 1.3.0(minecraft-data@..+mineflayer-monorepo+packages+minecraft-data)(prismarine-registry@1.11.0)
-      prismarine-block: https://codeload.github.com/zardoy/prismarine-block/tar.gz/853c559bff2b402863ee9a75b125a3ca320838f9(prismarine-registry@1.11.0)
+      prismarine-biome: 1.3.0(minecraft-data@minecraft-data)(prismarine-registry@1.11.0)
+      prismarine-block: https://codeload.github.com/zardoy/prismarine-block/tar.gz/401a296892fbde312ade34685fdc2db3d31668ad(prismarine-registry@1.11.0)
       prismarine-chat: 1.12.0
-      prismarine-chunk: file:../prismarine-chunk(minecraft-data@..+mineflayer-monorepo+packages+minecraft-data)
+      prismarine-chunk: file:../prismarine-chunk(minecraft-data@minecraft-data)
       prismarine-entity: 2.5.0
       prismarine-item: 1.17.0
       prismarine-nbt: 2.7.0
@@ -4156,24 +4154,15 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  prismarine-biome@1.3.0(minecraft-data@..+mineflayer-monorepo+packages+minecraft-data)(prismarine-registry@1.11.0):
+  prismarine-biome@1.3.0(minecraft-data@minecraft-data)(prismarine-registry@1.11.0):
     dependencies:
-      minecraft-data: link:../../mineflayer-monorepo/packages/minecraft-data
+      minecraft-data: link:../minecraft-data
       prismarine-registry: 1.11.0
 
-  prismarine-block@https://codeload.github.com/zardoy/prismarine-block/tar.gz/401a296892fbde312ade34685fdc2db3d31668ad:
+  prismarine-block@https://codeload.github.com/zardoy/prismarine-block/tar.gz/401a296892fbde312ade34685fdc2db3d31668ad(prismarine-registry@1.11.0):
     dependencies:
-      minecraft-data: link:../../mineflayer-monorepo/packages/minecraft-data
-      prismarine-biome: 1.3.0(minecraft-data@..+mineflayer-monorepo+packages+minecraft-data)(prismarine-registry@1.11.0)
-      prismarine-chat: 1.12.0
-      prismarine-item: 1.17.0
-      prismarine-nbt: 2.7.0
-      prismarine-registry: 1.11.0
-
-  prismarine-block@https://codeload.github.com/zardoy/prismarine-block/tar.gz/853c559bff2b402863ee9a75b125a3ca320838f9(prismarine-registry@1.11.0):
-    dependencies:
-      minecraft-data: link:../../mineflayer-monorepo/packages/minecraft-data
-      prismarine-biome: 1.3.0(minecraft-data@..+mineflayer-monorepo+packages+minecraft-data)(prismarine-registry@1.11.0)
+      minecraft-data: link:../minecraft-data
+      prismarine-biome: 1.3.0(minecraft-data@minecraft-data)(prismarine-registry@1.11.0)
       prismarine-chat: 1.12.0
       prismarine-item: 1.17.0
       prismarine-nbt: 2.7.0
@@ -4187,10 +4176,10 @@ snapshots:
       prismarine-nbt: 2.7.0
       prismarine-registry: 1.11.0
 
-  prismarine-chunk@file:../prismarine-chunk(minecraft-data@..+mineflayer-monorepo+packages+minecraft-data):
+  prismarine-chunk@file:../prismarine-chunk(minecraft-data@minecraft-data):
     dependencies:
-      prismarine-biome: 1.3.0(minecraft-data@..+mineflayer-monorepo+packages+minecraft-data)(prismarine-registry@1.11.0)
-      prismarine-block: https://codeload.github.com/zardoy/prismarine-block/tar.gz/401a296892fbde312ade34685fdc2db3d31668ad
+      prismarine-biome: 1.3.0(minecraft-data@minecraft-data)(prismarine-registry@1.11.0)
+      prismarine-block: https://codeload.github.com/zardoy/prismarine-block/tar.gz/401a296892fbde312ade34685fdc2db3d31668ad(prismarine-registry@1.11.0)
       prismarine-nbt: 2.7.0
       prismarine-registry: 1.11.0
       smart-buffer: 4.2.0
@@ -4218,7 +4207,7 @@ snapshots:
 
   prismarine-physics@1.10.0:
     dependencies:
-      minecraft-data: link:../../mineflayer-monorepo/packages/minecraft-data
+      minecraft-data: link:../minecraft-data
       prismarine-nbt: 2.7.0
       vec3: 0.1.10
 
@@ -4236,8 +4225,8 @@ snapshots:
 
   prismarine-registry@1.11.0:
     dependencies:
-      minecraft-data: link:../../mineflayer-monorepo/packages/minecraft-data
-      prismarine-block: https://codeload.github.com/zardoy/prismarine-block/tar.gz/853c559bff2b402863ee9a75b125a3ca320838f9(prismarine-registry@1.11.0)
+      minecraft-data: link:../minecraft-data
+      prismarine-block: https://codeload.github.com/zardoy/prismarine-block/tar.gz/401a296892fbde312ade34685fdc2db3d31668ad(prismarine-registry@1.11.0)
       prismarine-nbt: 2.7.0
 
   prismarine-windows@2.9.0:

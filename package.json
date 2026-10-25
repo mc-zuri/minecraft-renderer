@@ -125,7 +125,7 @@
       "prismarine-world": "github:zardoy/prismarine-world#next-era",
       "@types/three": "0.184.0",
       "prismarine-chunk": "file:../prismarine-chunk",
-      "minecraft-data": "link:../../mineflayer-monorepo/packages/minecraft-data"
+      "minecraft-data": "link:../minecraft-data"
     },
     "ignoredBuiltDependencies": [
       "core-js"
